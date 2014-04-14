@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 import unittest
 
 from mirai import *
@@ -228,6 +229,11 @@ class FutureMiscellaneousTests(unittest.TestCase):
       .get,
       0.05
     )
+
+  def test_executor(self):
+    old = Future.executor()
+    new = Future.executor(ThreadPoolExecutor(max_workers=10))
+    self.assertEqual(Future.call(lambda v: v+1, 1).get(0.05), 2)
 
 
 class FutureAlternativeNamesTests(unittest.TestCase):

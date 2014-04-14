@@ -874,3 +874,27 @@ class Future(object):
         the exception thrown as its exception.
     """
     return Future(self.EXECUTOR.submit(fn, *args, **kwargs))
+
+  @classmethod
+  def executor(cls, executor=None):
+    """
+    Set/Get the EXECUTOR Future uses.
+
+    Parameters
+    ==========
+    executor : futures.Executor or None
+        If None, retrieve the current executor, otherwise, shutdown the current
+        Executor object and replace it with this argument.
+
+    Returns
+    =======
+    executor : Executor
+        Current executor
+    """
+    if executor is None:
+      return cls.EXECUTOR
+    else:
+      if cls.EXECUTOR is not None:
+        cls.EXECUTOR.shutdown()
+      cls.EXECUTOR = executor
+      return cls.EXECUTOR
