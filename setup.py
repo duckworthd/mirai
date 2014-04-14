@@ -22,4 +22,7 @@ setup(
     install_requires = [
       "futures",
     ],
+    test_requires = [
+      "nose",
+    ]
 )
