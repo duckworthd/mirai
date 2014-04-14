@@ -492,7 +492,7 @@ class Future(object):
     def respond(fut):
       Future.call(fn, Future(fut))
 
-    self._future.add_done_callback(lambda fut: fn(Future(fut)))
+    self._future.add_done_callback(respond)
     return self
 
   def select_(self, *others):
