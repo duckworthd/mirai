@@ -1,11 +1,18 @@
 from setuptools import setup, find_packages
 
-import mirai
+def version():
+  import os
+  folder   = os.path.split(__file__)[0]
+  mirai    = os.path.join(folder, "mirai")
+  _version = os.path.join(mirai, "_version.py")
+  env      = {}
+  execfile(_version, env)
+  return env['__version__']
 
-
+print find_packages()
 setup(
     name              = 'mirai',
-    version           = mirai.__version__,
+    version           = version(),
     author            = 'Daniel Duckworth',
     author_email      = 'duckworthd@gmail.com',
     description       = "Twitter Futures in Python",
@@ -20,6 +27,7 @@ setup(
       'Programming Language :: Python',
     ],
     install_requires  = [
+      "setuptools>=3.4.4",
       "futures>=2.1.6",
     ],
     test_requires     = [
