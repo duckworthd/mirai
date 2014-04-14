@@ -417,7 +417,7 @@ class Future(object):
       except Exception as e:
         result.setexception(e)
 
-    self.EXECUTOR.submit(or_)
+    Future.call(or_)
     return result
 
   def proxyto(self, other):
@@ -490,7 +490,7 @@ class Future(object):
     self : Future
     """
     def respond(fut):
-      self.EXECUTOR.submit(fn, Future(fut))
+      Future.call(fn, Future(fut))
 
     self._future.add_done_callback(lambda fut: fn(Future(fut)))
     return self
@@ -758,7 +758,7 @@ class Future(object):
       except Exception as e:
         result.setexception(e)
 
-    cls.EXECUTOR.submit(collect)
+    Future.call(collect)
     return result
 
   @classmethod
@@ -811,7 +811,7 @@ class Future(object):
       except Exception as e:
         result.setexception(e)
 
-    cls.EXECUTOR.submit(join)
+    Future.call(join)
     return result
 
   @classmethod
@@ -852,7 +852,7 @@ class Future(object):
       except Exception as e:
         result.setexception(e)
 
-    cls.EXECUTOR.submit(select)
+    Future.call(select)
     return result
 
   @classmethod
