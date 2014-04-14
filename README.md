@@ -8,8 +8,8 @@ operator-chaining based way for taking advantage of futures.
 [1]: http://twitter.github.io/scala_school/finagle.html#futconcurrent
 [2]: https://docs.python.org/dev/library/concurrent.futures.html
 
-Here's an excellent example taken from Twitter's [Introduction to Finagle][1]
-page, converted into Python,
+Here's an excellent example inspired by Twitter's [Introduction to Finagle][1]
+page,
 
 
 ```python
@@ -28,7 +28,7 @@ class Img(object):
 
 profile  = HTMLPage(["portrait.jpg"], ["gallery.html"])
 portrait = Img()
-gallery  = HTMLPage(["kitten.jpg", "puppy.jpg"], ["profile.html"])
+gallery  = HTMLPage(["kitten.jpg", "puppy.jpg"], [])
 kitten   = Img()
 puppy    = Img()
 
@@ -53,24 +53,35 @@ def get_thumbnail(url):
 def get_thumbnails(url):
   return fetch(url).flatmap(lambda page:
     Future.collect(
-      map(fetch, page.image_links])
+      map(fetch, page.image_links)
     )
   )
 
-# recursively crawl the entire internet. since there's no checks for loops
-# (e.g. profile.html -> gallery.html -> profile.html -> ...), this will run
-# forever.
-def crawl(url):
+def flatten(lol):
+  result = []
+  for l in lol:
+    result.extend(l)
+  return result
 
-  def flatten(lol):   # since there's no list.flatten in Python
-    result = []
-    for l in lol:
-      result.extend(l)
-    return result
+# recursively crawl the entire internet for images.
+def get_all_thumbnails(url):
 
-  return fetch(url).flatmap(lambda page:
-    Future
-      .collect(map(crawl, page.links))
-      .map(flatten)
-  )
+  def get_images(page):
+    local_images = (
+      Future
+      .collect(map(fetch, page.image_links))
+    )
+    other_images = (
+      Future
+      .collect(map(get_all_thumbnails, page.links))
+      .map(flatten)   # as each link is a future containing a list of images
+    )
+
+    return (
+      Future
+      .collect([local_images, other_images])
+      .map(flatten)   # combine both lists of images into 1 big list
+    )
+
+  return fetch(url).flatmap(get_images)
 ```
