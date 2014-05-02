@@ -24,44 +24,47 @@ import time
 #   shutdown()
 
 
-class FutureError(Exception):
+class MiraiError(Exception):
   pass
 
 
-class AlreadyResolvedError(FutureError):
+class AlreadyResolvedError(MiraiError):
   pass
 
 
-class Future(object):
+class Promise(object):
 
   EXECUTOR = futures.ThreadPoolExecutor(max_workers=10)
 
+  __slots__ = ['_future', '_lock']
+
   def __init__(self, future=None):
     self._future = future or futures.Future()
+    self._lock   = threading.Lock()
 
   def andthen(self, fn):
     """
-    Apply a function with a single argument: the value this Future resolves to.
-    The function must return another future.  If this Future fails, `fn` will
-    not be called. Same as as `Future.flatmap`.
+    Apply a function with a single argument: the value this Promise resolves to.
+    The function must return another future.  If this Promise fails, `fn` will
+    not be called. Same as as `Promise.flatmap`.
 
     Parameters
     ==========
-    fn : (value,) -> Future
-        Function to apply. Takes 1 positional argument. Must return a Future.
+    fn : (value,) -> Promise
+        Function to apply. Takes 1 positional argument. Must return a Promise.
 
     Returns
     =======
-    result : Future
-        Future `fn` will return.
+    result : Promise
+        Promise `fn` will return.
     """
     return self.flatmap(fn)
 
   def __call__(self, timeout=None):
     """
-    Retrieve value of Future; block until it's ready or `timeout` seconds
+    Retrieve value of Promise; block until it's ready or `timeout` seconds
     have passed. If `timeout` seconds pass, then a `TimeoutError` will
-    be raised. If this Future failed, the set exception will be raised.
+    be raised. If this Promise failed, the set exception will be raised.
 
     Parameters
     ==========
@@ -83,22 +86,22 @@ class Future(object):
 
   def ensure(self, fn):
     """
-    Ensure that no-argument function `fn` is called when this Future resolves,
+    Ensure that no-argument function `fn` is called when this Promise resolves,
     regardless of whether or not it completes successfuly.
 
     Parameters
     ==========
     fn : (,) -> None
-        function to apply upon Future completion. takes no arguments. Return
+        function to apply upon Promise completion. takes no arguments. Return
         value ignored.
 
     Returns
     =======
-    self : Future
+    self : Promise
     """
     def ensure(v):
       try:
-        Future.call(fn)
+        Promise.call(fn)
       except Exception as e:
         pass
 
@@ -106,9 +109,9 @@ class Future(object):
 
   def filter(self, fn):
     """
-    Construct a new Future that fails if `fn` doesn't evaluate truthily when
+    Construct a new Promise that fails if `fn` doesn't evaluate truthily when
     given `self.get()` as its only argument. If `fn` evaluates falsily, then
-    the resulting Future fails with a `FutureError`.
+    the resulting Promise fails with a `MiraiError`.
 
     Parameters
     ==========
@@ -117,40 +120,40 @@ class Future(object):
 
     Returns
     =======
-    result : Future
-        Future whose contents are the contents of this Future if `fn` evaluates
-        truth on this Future's contents.
+    result : Promise
+        Promise whose contents are the contents of this Promise if `fn` evaluates
+        truth on this Promise's contents.
     """
     return (
       self
-      .flatmap(lambda v: Future.collect([
-        Future.value(v),
-        Future.call(fn, v),
+      .flatmap(lambda v: Promise.collect([
+        Promise.value(v),
+        Promise.call(fn, v),
       ]))
       .flatmap(lambda (v, b):
-        Future.value(v) if b
-        else Future.exception(FutureError("Value {} was filtered out".format(v)))
+        Promise.value(v) if b
+        else Promise.exception(MiraiError("Value {} was filtered out".format(v)))
       )
     )
 
   def flatmap(self, fn):
     """
-    Apply a function with a single argument: the value this Future resolves to.
-    The function must return another future.  If this Future fails, `fn` will
+    Apply a function with a single argument: the value this Promise resolves to.
+    The function must return another future.  If this Promise fails, `fn` will
     not be called.
 
     Parameters
     ==========
-    fn : (value,) -> Future
-        Function to apply. Takes 1 positional argument. Must return a Future.
+    fn : (value,) -> Promise
+        Function to apply. Takes 1 positional argument. Must return a Promise.
 
     Returns
     =======
-    result : Future
-        Future containing return result of `fn`
+    result : Promise
+        Promise containing return result of `fn`
     """
 
-    result = Future()
+    result = Promise()
 
     def populate(v):
       def setvalue(fut):
@@ -161,7 +164,7 @@ class Future(object):
 
       try:
         (
-          Future.call(fn, v)
+          Promise.call(fn, v)
           .onsuccess(setvalue)
           .onfailure(result.setexception)
         )
@@ -174,13 +177,13 @@ class Future(object):
     return result
   def foreach(self, fn):
     """
-    Apply a function if this Future resolves successfully. The function
-    receives the contents of this Future as its only argument.
+    Apply a function if this Promise resolves successfully. The function
+    receives the contents of this Promise as its only argument.
 
     Parameters
     ==========
     fn : (value,) -> None
-        Function to apply to this Future's contents. Return value ignored.
+        Function to apply to this Promise's contents. Return value ignored.
 
     Returns
     =======
@@ -188,11 +191,14 @@ class Future(object):
     """
     self.onsuccess(fn)
 
+  def future(self):
+    return Future(self)
+
   def get(self, timeout=None):
     """
-    Retrieve value of Future; block until it's ready or `timeout` seconds
+    Retrieve value of Promise; block until it's ready or `timeout` seconds
     have passed. If `timeout` seconds pass, then a `TimeoutError` will
-    be raised. If this Future failed, the set exception will be raised.
+    be raised. If this Promise failed, the set exception will be raised.
 
     Parameters
     ==========
@@ -214,7 +220,7 @@ class Future(object):
 
   def getorelse(self, default):
     """
-    Like `Future.get`, but instead of raising an exception when this Future
+    Like `Promise.get`, but instead of raising an exception when this Promise
     fails, returns a default value.
 
     Parameters
@@ -229,27 +235,27 @@ class Future(object):
 
   def handle(self, fn):
     """
-    If this Future fails, call `fn` on the ensuing exception to obtain a
+    If this Promise fails, call `fn` on the ensuing exception to obtain a
     successful value.
 
     Parameters
     ==========
     fn : (exception,) -> anything
         Function applied to recover from a failed exception. Its return value
-        will be the value of the resulting Future.
+        will be the value of the resulting Promise.
 
     Returns
     =======
-    result : Future
-        Resulting Future returned by apply `fn` to the exception, then setting
-        the return value to to `result`'s value. If this Future is already
+    result : Promise
+        Resulting Promise returned by apply `fn` to the exception, then setting
+        the return value to to `result`'s value. If this Promise is already
         successful, its value is propagated onto `result`.
     """
-    return self.rescue(lambda v: Future.call(fn, v))
+    return self.rescue(lambda v: Promise.call(fn, v))
 
   def isdefined(self):
     """
-    Return `True` if this Future has already been resolved, successfully or
+    Return `True` if this Promise has already been resolved, successfully or
     unsuccessfully.
 
     Returns
@@ -260,7 +266,7 @@ class Future(object):
 
   def isfailure(self):
     """
-    Return `True` if this Future failed, `False` if it succeeded, and `None` if
+    Return `True` if this Promise failed, `False` if it succeeded, and `None` if
     it's not yet resolved.
 
     Returns
@@ -273,7 +279,7 @@ class Future(object):
 
   def issuccess(self):
     """
-    Return `True` if this Future succeeded, `False` if it failed, and `None` if
+    Return `True` if this Promise succeeded, `False` if it failed, and `None` if
     it's not yet resolved.
 
     Returns
@@ -291,43 +297,43 @@ class Future(object):
 
   def join_(self, *others):
     """
-    Combine values of this Future and 1 or more other Futures into a list.
+    Combine values of this Promise and 1 or more other Promises into a list.
     Results are in the same order `[self] + others` is in.
 
     Parameters
     ==========
-    others : 1 or more Futures
-        Futures to combine with this Future.
+    others : 1 or more Promises
+        Promises to combine with this Promise.
 
     Returns
     =======
-    result : Future
-        Future resolving to a list of containing the values of this Future and
-        all other Futures. If any Future fails, `result` holds the exception in
+    result : Promise
+        Promise resolving to a list of containing the values of this Promise and
+        all other Promises. If any Promise fails, `result` holds the exception in
         the one which fails soonest.
     """
     return self.collect([self] + list(others))
 
   def map(self, fn):
     """
-    Transform this Future by applying a function to its value
+    Transform this Promise by applying a function to its value
 
     Parameters
     ==========
     fn : (value,) -> anything
-        Function to apply to this Future's value on completion.
+        Function to apply to this Promise's value on completion.
 
     Returns
     =======
-    result : Future
-        Future containing `fn` applied to this Future's value. If this Future
+    result : Promise
+        Promise containing `fn` applied to this Promise's value. If this Promise
         fails, the exception is propagated.
     """
-    result = Future()
+    result = Promise()
 
     def map(v):
       try:
-        Future.call(fn, v).proxyto(result)
+        Promise.call(fn, v).proxyto(result)
       except Exception as e:
         result.setexception(e)
 
@@ -338,46 +344,46 @@ class Future(object):
 
   def onfailure(self, fn):
     """
-    Apply a callback if this Future fails. Callbacks can be added after this
-    Future has resolved.
+    Apply a callback if this Promise fails. Callbacks can be added after this
+    Promise has resolved.
 
     Parameters
     ==========
     fn : (exception,) -> None
         Function to call upon failure. Its only argument is the exception set
-        to this Future. If this future succeeds, `fn` will not be called.
+        to this Promise. If this future succeeds, `fn` will not be called.
 
     Returns
     =======
-    self : Future
+    self : Promise
     """
     def onfailure(fut):
       try:
         fut.result()
       except Exception as e:
-        Future.call(fn, e)
+        Promise.call(fn, e)
 
     self._future.add_done_callback(onfailure)
     return self
 
   def onsuccess(self, fn):
     """
-    Apply a callback if this Future succeeds. Callbacks can be added after this
-    Future has resolved.
+    Apply a callback if this Promise succeeds. Callbacks can be added after this
+    Promise has resolved.
 
     Parameters
     ==========
     fn : (value,) -> None
         Function to call upon success. Its only argument is the value set
-        to this Future. If this future fails, `fn` will not be called.
+        to this Promise. If this future fails, `fn` will not be called.
 
     Returns
     =======
-    self : Future
+    self : Promise
     """
     def onsuccess(fut):
       try:
-        Future.call(fn, fut.result())
+        Promise.call(fn, fut.result())
       except Exception as e:
         pass
 
@@ -386,20 +392,20 @@ class Future(object):
 
   def or_(self, *others):
     """
-    Return the first Future that finishes among this Future and one or more
-    other Futures.
+    Return the first Promise that finishes among this Promise and one or more
+    other Promises.
 
     Parameters
     ==========
-    others : one or more Futures
+    others : one or more Promises
         Other futures to consider.
 
     Returns
     =======
-    result : Future
+    result : Promise
         First future that is resolved, successfully or otherwise.
     """
-    result = Future()
+    result = Promise()
 
     def or_():
       def setresult(v):
@@ -410,50 +416,53 @@ class Future(object):
 
       try:
         (
-          Future.select([self] + list(others))
+          Promise.select([self] + list(others))
           .onsuccess(setresult)
           .onfailure(result.setexception)
         )
       except Exception as e:
         result.setexception(e)
 
-    Future.call(or_)
+    Promise.call(or_)
     return result
 
   def proxyto(self, other):
     """
-    Copy the state of this Future to another.
+    Copy the state of this Promise to another.
 
     Parameters
     ==========
-    other : Future
-        Another Future to copy the state of this Future to, upon completion.
+    other : Promise
+        Another Promise to copy the state of this Promise to, upon completion.
 
     Returns
     =======
-    self : Future
+    self : Promise
     """
     self.onsuccess(other.setvalue).onfailure(other.setexception)
     return self
 
+  def promise(self):
+    return Promise(self)
+
   def rescue(self, fn):
     """
-    If this Future fails, call `fn` on the ensuing exception to recover another
-    (potentially successful) Future. Same as `Future.handle`.
+    If this Promise fails, call `fn` on the ensuing exception to recover another
+    (potentially successful) Promise. Same as `Promise.handle`.
 
     Parameters
     ==========
-    fn : (exception,) -> Future
-        Function applied to recover from a failed exception. Must return a Future.
+    fn : (exception,) -> Promise
+        Function applied to recover from a failed exception. Must return a Promise.
 
     Returns
     =======
-    result : Future
-        Resulting Future returned by apply `fn` to the exception this Future
-        contains. If this Future is successful, its value is propagated onto
+    result : Promise
+        Resulting Promise returned by apply `fn` to the exception this Promise
+        contains. If this Promise is successful, its value is propagated onto
         `result`.
     """
-    result = Future()
+    result = Promise()
 
     def rescue(e):
       def setvalue(fut):
@@ -464,7 +473,7 @@ class Future(object):
 
       try:
         (
-          Future.call(fn, e)
+          Promise.call(fn, e)
           .onsuccess(setvalue)
           .onfailure(result.setexception)
         )
@@ -478,44 +487,45 @@ class Future(object):
 
   def respond(self, fn):
     """
-    Apply a function to this Future when it's resolved.
+    Apply a function to this Promise when it's resolved.
 
     Parameters
     ==========
     fn : (future,) -> None
-        Function to apply to this Future upon completion. Return value is ignored
+        Function to apply to this Promise upon completion. Return value is ignored
 
     Returns
     =======
-    self : Future
+    self : Promise
     """
     def respond(fut):
-      Future.call(fn, Future(fut))
+      Promise.call(fn, Promise(fut))
 
     self._future.add_done_callback(respond)
     return self
 
   def select_(self, *others):
     """
-    Return the first Future that finishes among this Future and one or more
-    other Futures.
+    Return the first Promise that finishes among this Promise and one or more
+    other Promises.
 
     Parameters
     ==========
-    others : one or more Futures
+    others : one or more Promises
         Other futures to consider.
 
     Returns
     =======
-    result : Future
+    result : Promise
         First future that is resolved, successfully or otherwise.
     """
     return self.or_(*others)
 
   def setexception(self, e):
     """
-    Set the state of this Future as failed with a given Exception. State can
-    only be set once; once a Future is defined, it cannot be redefined.
+    Set the state of this Promise as failed with a given Exception. State can
+    only be set once; once a Promise is defined, it cannot be redefined. This
+    operation is thread (but not process) safe.
 
     Parameters
     ==========
@@ -523,17 +533,22 @@ class Future(object):
 
     Returns
     =======
-    self : Future
+    self : Promise
     """
+    self._lock.acquire()
     if self.isdefined():
-      raise AlreadyResolvedError("Future is already resolved; you cannot set its status again.")
-    self._future.set_exception(e)
-    return self
+      self._lock.release()
+      raise AlreadyResolvedError("Promise is already resolved; you cannot set its status again.")
+    else:
+      self._future.set_exception(e)
+      self._lock.release()
+      return self
 
   def setvalue(self, val):
     """
-    Set the state of this Future as successful with a given value. State can
-    only be set once; once a Future is defined, it cannot be redefined.
+    Set the state of this Promise as successful with a given value. State can
+    only be set once; once a Promise is defined, it cannot be redefined.This
+    operation is thread (but not process) safe.
 
     Parameters
     ==========
@@ -541,24 +556,28 @@ class Future(object):
 
     Returns
     =======
-    self : Future
+    self : Promise
     """
+    self._lock.acquire()
     if self.isdefined():
-      raise AlreadyResolvedError("Future is already resolved; you cannot set its status again.")
-    self._future.set_result(val)
-    return self
+      self._lock.release()
+      raise AlreadyResolvedError("Promise is already resolved; you cannot set its status again.")
+    else:
+      self._future.set_result(val)
+      self._lock.release()
+      return self
 
   def unit(self):
     """
-    Convert this Future to another that disregards its result.
+    Convert this Promise to another that disregards its result.
 
     Returns
     =======
-    result : Future
-        Future with a value of `None` if this Future succeeds. If this Future
+    result : Promise
+        Promise with a value of `None` if this Promise succeeds. If this Promise
         fails, the exception is propagated.
     """
-    result = Future()
+    result = Promise()
     try:
       (
         self
@@ -571,32 +590,32 @@ class Future(object):
 
   def update(self, other):
     """
-    Populate this Future with the contents of another.
+    Populate this Promise with the contents of another.
 
     Parameters
     ==========
-    other : Future
-        Future to copy
+    other : Promise
+        Promise to copy
 
     Returns
     =======
-    self : Future
+    self : Promise
     """
     other.proxyto(self)
     return self
 
   def updateifempty(self, other):
     """
-    Like `Future.update`, but update only if this Future isn't already defined.
+    Like `Promise.update`, but update only if this Promise isn't already defined.
 
     Parameters
     ==========
-    other : Future
-        Future to copy, if necessary.
+    other : Promise
+        Promise to copy, if necessary.
 
     Returns
     =======
-    self : Future
+    self : Promise
     """
     def setvalue(v):
       try:
@@ -619,10 +638,10 @@ class Future(object):
 
   def within(self, duration):
     """
-    Return a Future whose state is guaranteed to be resolved within `duration`
-    seconds. If this Future completes before `duration` seconds expire, it will
-    contain this Future's contents. If this Future is not resolved by then, the
-    resulting Future will fail with a `TimeoutError`.
+    Return a Promise whose state is guaranteed to be resolved within `duration`
+    seconds. If this Promise completes before `duration` seconds expire, it will
+    contain this Promise's contents. If this Promise is not resolved by then, the
+    resulting Promise will fail with a `TimeoutError`.
 
     Parameters
     ==========
@@ -631,27 +650,27 @@ class Future(object):
 
     Returns
     =======
-    result : Future
-        Future guaranteed to resolve in `duration` seconds.
+    result : Promise
+        Promise guaranteed to resolve in `duration` seconds.
     """
-    e = TimeoutError("Future did not finish in {} seconds".format(duration))
-    return self.or_(Future.wait(duration).flatmap(lambda v: Future.exception(e)))
+    e = TimeoutError("Promise did not finish in {} seconds".format(duration))
+    return self.or_(Promise.wait(duration).flatmap(lambda v: Promise.exception(e)))
 
   # CONSTRUCTORS
   @classmethod
   def value(cls, val):
     """
-    Construct a Future that is already resolved successfully to a value.
+    Construct a Promise that is already resolved successfully to a value.
 
     Parameters
     ==========
     val : anything
-        Value to resolve new Future to.
+        Value to resolve new Promise to.
 
     Returns
     =======
-    result : Future
-        Future containing `val` as its value.
+    result : Promise
+        Promise containing `val` as its value.
     """
     f = cls()
     f.setvalue(val)
@@ -660,7 +679,7 @@ class Future(object):
   @classmethod
   def wait(cls, duration):
     """
-    Construct a Future that succeeds in `duration` seconds with value `None`.
+    Construct a Promise that succeeds in `duration` seconds with value `None`.
 
     Parameters
     ==========
@@ -669,8 +688,8 @@ class Future(object):
 
     Returns
     =======
-    result : Future
-        Future that will resolve in `duration` seconds with value `None`.
+    result : Promise
+        Promise that will resolve in `duration` seconds with value `None`.
     """
     result = cls()
 
@@ -687,17 +706,17 @@ class Future(object):
   @classmethod
   def exception(cls, exc):
     """
-    Construct a Future that has already failed with a given exception.
+    Construct a Promise that has already failed with a given exception.
 
     Parameters
     ==========
     exc : Exception
-        Exception to fail new Future with
+        Exception to fail new Promise with
 
     Returns
     =======
-    result : Future
-        New Future that has already failed with the given exception.
+    result : Promise
+        New Promise that has already failed with the given exception.
     """
     f = cls()
     f.setexception(exc)
@@ -708,25 +727,25 @@ class Future(object):
   @classmethod
   def collect(cls, fs, timeout=None):
     """
-    Convert a sequence of Futures into a Future containing a sequence of
-    values, one per Future in `fs`. The resulting Future resolves once all
-    Futures in `fs` resolve successsfully or upon the first failure. In the
-    latter case, the failing Future's exception is propagated.
+    Convert a sequence of Promises into a Promise containing a sequence of
+    values, one per Promise in `fs`. The resulting Promise resolves once all
+    Promises in `fs` resolve successsfully or upon the first failure. In the
+    latter case, the failing Promise's exception is propagated.
 
     Parameters
     ==========
-    fs : [Future]
-        List of Futures to merge.
+    fs : [Promise]
+        List of Promises to merge.
     timeout : number or None
         Number of seconds to wait before registering a `TimeoutError` with the
-        resulting Future. If `None`, wait indefinitely.
+        resulting Promise. If `None`, wait indefinitely.
 
     Returns
     =======
-    result : Future
-        Future containing values of all Futures in `fs`. If any Future in `fs`
+    result : Promise
+        Promise containing values of all Promises in `fs`. If any Promise in `fs`
         fails, `result` fails with the same exception. If `timeout` seconds
-        pass before all Futures in `fs` resolve, `result` fails with a
+        pass before all Promises in `fs` resolve, `result` fails with a
       `TimeoutError`.
     """
     # create a result future, then create a task that gets all the futures'
@@ -758,31 +777,31 @@ class Future(object):
       except Exception as e:
         result.setexception(e)
 
-    Future.call(collect)
+    Promise.call(collect)
     return result
 
   @classmethod
   def join(cls, fs, timeout=None):
     """
-    Construct a Future that resolves when all Futures in `fs` have resolved. If
-    any Future in `fs` fails, the error is propagated into the resulting
-    Future. If `timeout` seconds pass before all Futures have resolved, the
-    resulting Future fails with a `TimeoutError`.
+    Construct a Promise that resolves when all Promises in `fs` have resolved. If
+    any Promise in `fs` fails, the error is propagated into the resulting
+    Promise. If `timeout` seconds pass before all Promises have resolved, the
+    resulting Promise fails with a `TimeoutError`.
 
     Parameters
     ==========
-    fs : [Future]
-        List of Futures to merge.
+    fs : [Promise]
+        List of Promises to merge.
     timeout : number or None
         Number of seconds to wait before registering a `TimeoutError` with the
-        resulting Future. If `None`, wait indefinitely.
+        resulting Promise. If `None`, wait indefinitely.
 
     Returns
     =======
-    result : Future
-        Future containing None if all Futures in `fs` succeed, the exception of
-        the first failing Future in `fs`, or a `TimeoutError` if `timeout`
-        seconds pass before all Futures in `fs` resolve.
+    result : Promise
+        Promise containing None if all Promises in `fs` succeed, the exception of
+        the first failing Promise in `fs`, or a `TimeoutError` if `timeout`
+        seconds pass before all Promises in `fs` resolve.
     """
     result = cls()
 
@@ -811,31 +830,31 @@ class Future(object):
       except Exception as e:
         result.setexception(e)
 
-    Future.call(join)
+    Promise.call(join)
     return result
 
   @classmethod
   def select(cls, fs, timeout=None):
     """
-    Return a Future containing a tuple of 2 elements. The first is the first
-    Future in `fs` to resolve; the second is all remaining Futures that may or
-    may not be resolved yet. If `timeout` seconds pass before any Future
-    resolves, the resulting Future fails with a `TimeoutError`. The resolved
-    Future is not guaranteed to have completed successfully.
+    Return a Promise containing a tuple of 2 elements. The first is the first
+    Promise in `fs` to resolve; the second is all remaining Promises that may or
+    may not be resolved yet. If `timeout` seconds pass before any Promise
+    resolves, the resulting Promise fails with a `TimeoutError`. The resolved
+    Promise is not guaranteed to have completed successfully.
 
     Parameters
     ==========
-    fs : [Future]
-        List of Futures to merge.
+    fs : [Promise]
+        List of Promises to merge.
     timeout : number or None
         Number of seconds to wait before registering a `TimeoutError` with the
-        resulting Future. If `None`, wait indefinitely.
+        resulting Promise. If `None`, wait indefinitely.
 
     Returns
     =======
-    result : Future
-        Future containing the first Future in `fs` to finish and all remaining
-        (potentially) unresolved Futures as a tuple of 2 elements for its value
+    result : Promise
+        Promise containing the first Promise in `fs` to finish and all remaining
+        (potentially) unresolved Promises as a tuple of 2 elements for its value
         or a `TimeoutError` for its exception.
     """
     result = cls()
@@ -852,13 +871,13 @@ class Future(object):
       except Exception as e:
         result.setexception(e)
 
-    Future.call(select)
+    Promise.call(select)
     return result
 
   @classmethod
   def call(self, fn, *args, **kwargs):
     """
-    Call a function asynchronously and return a Future with its result.
+    Call a function asynchronously and return a Promise with its result.
 
     Parameters
     ==========
@@ -869,16 +888,16 @@ class Future(object):
 
     Returns
     =======
-    result : Future
-        Future containing the result of `fn(*args, **kwargs)` as its value or
+    result : Promise
+        Promise containing the result of `fn(*args, **kwargs)` as its value or
         the exception thrown as its exception.
     """
-    return Future(self.EXECUTOR.submit(fn, *args, **kwargs))
+    return Promise(self.EXECUTOR.submit(fn, *args, **kwargs))
 
   @classmethod
   def executor(cls, executor=None):
     """
-    Set/Get the EXECUTOR Future uses.
+    Set/Get the EXECUTOR Promise uses.
 
     Parameters
     ==========
@@ -898,3 +917,15 @@ class Future(object):
         cls.EXECUTOR.shutdown()
       cls.EXECUTOR = executor
       return cls.EXECUTOR
+
+
+class Future(object):
+
+  def __init__(self, promise):
+    self._promise = promise
+
+  def __getattr__(self, key):
+    if key not in ['setexception', 'setvalue']:
+      return getattr(self._promise, key)
+    else:
+      raise AttributeError("Futures are read only; Promises are writable")

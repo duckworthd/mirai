@@ -1,2 +1,2 @@
-from .futures import Future, AlreadyResolvedError, FutureError, TimeoutError
+from .futures import Promise, Future, AlreadyResolvedError, MiraiError, TimeoutError
 from ._version import __version__
