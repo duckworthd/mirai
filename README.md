@@ -1,87 +1,73 @@
 mirai
 =====
 
-`mirai` is a port of [Twitter Futures][1] to python based on a backport of
+`mirai` is a port of [Twitter Futures][1] to python powered by a backport of
 Python 3.2's [concurrent.futures][2]. `mirai` offers a simpler
-operator-chaining based way for taking advantage of futures.
+operator chaining-based way for using promises and futures.
 
 [1]: http://twitter.github.io/scala_school/finagle.html#futconcurrent
 [2]: https://docs.python.org/dev/library/concurrent.futures.html
 
-Here's an excellent example inspired by Twitter's [Introduction to Finagle][1]
-page,
+Diving In
+=========
 
+`mirai` is based around the concept of a Promises -- containers that
+are populated with the result of an asynchronous computation. Promises provide
+a more streamlined way for dealing with asynchronous code than callbacks.
 
-```python
-from collections import namedtuple
-from mirai import Future
+```
+from mirai import Promise
+import funcy as fu
 
-class HTMLPage(object):
-  def __init__(self, i, l):
-    self.image_links = i
-    self.links       = l
+(
+  Promise
 
-class Img(object):
-  def __init__(self):
-    self.image_links = []
-    self.links       = []
+  # `call` is a way to execute a synchronous function asynchronously. It
+  # returns a Promise you can use to queue up callbacks
+  .call(twitter.get_followers, "duck")
 
-profile  = HTMLPage(["portrait.jpg"], ["gallery.html"])
-portrait = Img()
-gallery  = HTMLPage(["kitten.jpg", "puppy.jpg"], [])
-kitten   = Img()
-puppy    = Img()
+  # `map` means "create another Promise by applying the following function to
+  # my contents." If the previous Promise threw an exception, this callback
+  # won't execute, and the resulting Promise will contain the previous
+  # Promise's exception.
+  .map(lambda followers: [
+    Future.call(twitter.get_latest_posts, follow)
+    for follower in followers
+  ])
 
-internet = {
-  "profile.html" : profile,
-  "gallery.html" : gallery,
-  "portrait.jpg" : portrait,
-  "kitten.jpg"   : kitten,
-  "puppy.jpg"    : puppy,
-}
+  # `Promise.collect` turns a sequence of promises into a Promise with a
+  # sequence of items. If you have many sources for Promises, you can use
+  # `Promise.collect` to bundle them together. Notice that we're using
+  # `Promise.flatmap` here -- that's because `Promise.collect` returns a
+  # Promise, not a normal value. If we didn't use flatmap, we'd end up with a
+  # Promise containing another Promise!
+  .flatmap(Promise.collect)
 
-# In a real crawler, this would be replaced by something that downloads content
-# from the web and populates a future with it.
-def fetch(url):
-  return Future.value(internet[url])
+  # Each follower gave me a list of tweets, so rather than dealing a list of
+  # lists, lets just turn it into a flat list of tweets
+  .map(fu.flatten)
 
-# get a single image from a page
-def get_thumbnail(url):
-  return fetch(url).flatmap(lambda page: fetch(page.image_links[0]))
+  # `Promise.onsuccess` and `Promise.onfailure` allow you to attach a callback
+  # that doesn't actually affect the Promise's value. Great for logging!
+  .onsuccess(lambda tweets: print("Retrieved {:,d} Tweets from my followers"))
 
-# get all images from a page
-def get_thumbnails(url):
-  return fetch(url).flatmap(lambda page:
-    Future.collect(
-      map(fetch, page.image_links)
-    )
-  )
+  # Notice how we turned what could have been a synchronous double-for loop
+  # into a series of asynchronous calls? Pretty awesome!
+  .map(lambda tweets: [
+    Future.call(twitter.retweet, tweet)
+    for tweet in tweets
+  ])
+  .flatmap(Future.collect)
+  .onsuccess(lambda retweets: print("I love EVERYBODY!"))
 
-def flatten(lol):
-  result = []
-  for l in lol:
-    result.extend(l)
-  return result
+  # You can use `Promise.rescue` to turn a failing Promise into a successfuly
+  # one, too.
+  .rescue(lambda e: Future.value("Something went wrong...oh well"))
 
-# recursively crawl the entire internet for images.
-def get_all_thumbnails(url):
-
-  def get_images(page):
-    local_images = (
-      Future
-      .collect(map(fetch, page.image_links))
-    )
-    other_images = (
-      Future
-      .collect(map(get_all_thumbnails, page.links))
-      .map(flatten)   # as each link is a future containing a list of images
-    )
-
-    return (
-      Future
-      .collect([local_images, other_images])
-      .map(flatten)   # combine both lists of images into 1 big list
-    )
-
-  return fetch(url).flatmap(get_images)
+  # All of the above isn't executed until you request it's data, so don't
+  # forget to call `Promise.get`! You can also use `Promise.join` and
+  # `Promise.select` if you want to gather many Promises or just want the first
+  # that finishes.
+  .get()
+)
 ```
