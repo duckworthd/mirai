@@ -2,6 +2,7 @@ from concurrent.futures import ThreadPoolExecutor
 import unittest
 
 from mirai import *
+import mirai
 
 
 class PromiseConstructorTests(unittest.TestCase):
@@ -14,6 +15,21 @@ class PromiseConstructorTests(unittest.TestCase):
 
   def test_wait(self):
     self.assertIsNone(Promise.wait(0.05).get(), None)
+
+  def test_call(self):
+
+    def foo(a, b):
+      return a+b
+
+    # value matches
+    self.assertEqual(3, Promise.call(foo, 1, b=2).get(0.05))
+
+    # exceptions subclass appropriately
+    def bar():
+      raise NotImplementedError("Uh oh...")
+
+    self.assertRaises(NotImplementedError, Promise.call(bar).get, 0.05)
+    self.assertRaises(mirai.futures.ShadowException, Promise.call(bar).get, 0.05)
 
 
 class PromiseBasicTests(unittest.TestCase):
@@ -61,9 +77,11 @@ class PromiseBasicTests(unittest.TestCase):
     self.assertEqual(fut.get(), 1)
 
   def test_get_exception(self):
-    fut = Promise.exception(Exception())
+    class VerySpecificException(Exception): pass
+    fut = Promise.exception(VerySpecificException())
 
-    self.assertRaises(Exception, fut.get)
+    # raises the right classs
+    self.assertRaises(VerySpecificException, fut.get)
 
   def test_isdefined(self):
     self.assertFalse(Promise().isdefined())
