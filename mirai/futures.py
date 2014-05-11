@@ -27,10 +27,15 @@ import sys
 
 
 class MiraiError(Exception):
+  """Base class for all exceptions raise by Promises"""
   pass
 
 
 class AlreadyResolvedError(MiraiError):
+  """
+  Exception thrown when attempting to set the value or exception of a Promise
+  that has already had its value or exception set.
+  """
   pass
 
 
@@ -194,6 +199,14 @@ class Promise(object):
     self.onsuccess(fn)
 
   def future(self):
+    """
+    Retrieve a `Future` encapsulating this promise. A `Future` is a read-only
+    version of the exact same thing.
+
+    Returns
+    =======
+    future : Future
+    """
     return Future(self)
 
   def get(self, timeout=None):
@@ -748,7 +761,7 @@ class Promise(object):
         Promise containing values of all Promises in `fs`. If any Promise in `fs`
         fails, `result` fails with the same exception. If `timeout` seconds
         pass before all Promises in `fs` resolve, `result` fails with a
-      `TimeoutError`.
+        `TimeoutError`.
     """
     # create a result future, then create a task that gets all the futures'
     # values and sets it to result future's ouptut
@@ -879,7 +892,12 @@ class Promise(object):
   @classmethod
   def call(self, fn, *args, **kwargs):
     """
-    Call a function asynchronously and return a Promise with its result.
+    Call a function asynchronously and return a Promise with its result. If an
+    exception is thrown inside `fn`, a new exception type will be constructed
+    inheriting both from `MiraiError` and the exception's original type. The
+    new exception is the same the original, except that it also contains a
+    `context` attribute detailing the stack at the time the exception was
+    thrown.
 
     Parameters
     ==========
@@ -899,11 +917,12 @@ class Promise(object):
   @classmethod
   def executor(cls, executor=None):
     """
-    Set/Get the EXECUTOR Promise uses.
+    Set/Get the EXECUTOR Promise uses. If setting, the current executor is
+    first shut down.
 
     Parameters
     ==========
-    executor : futures.Executor or None
+    executor : concurrent.futures.Executor or None
         If None, retrieve the current executor, otherwise, shutdown the current
         Executor object and replace it with this argument.
 
