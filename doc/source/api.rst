@@ -33,8 +33,7 @@ Combining Promises
 Thread Management
 -----------------
 
-.. autoclass:: Promise
-  :members: executor
+.. automethod:: Promise.executor
 
 Exceptions
 ----------

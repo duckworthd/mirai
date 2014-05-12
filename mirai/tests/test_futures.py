@@ -2,7 +2,6 @@ from concurrent.futures import ThreadPoolExecutor
 import unittest
 
 from mirai import *
-import mirai
 
 
 class PromiseConstructorTests(unittest.TestCase):

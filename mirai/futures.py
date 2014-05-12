@@ -78,7 +78,7 @@ class Promise(object):
 
     Returns
     -------
-    result : Promise
+    result : Future
         Promise `fn` will return.
     """
     return self.flatmap(fn)
@@ -97,7 +97,7 @@ class Promise(object):
 
     Returns
     -------
-    result
+    result : object
         Contents of this future if it resolved successfully.
 
     Raises
@@ -143,8 +143,8 @@ class Promise(object):
 
     Returns
     -------
-    result : Promise
-        Promise whose contents are the contents of this Promise if `fn` evaluates
+    result : Future
+        Future whose contents are the contents of this Promise if `fn` evaluates
         truth on this Promise's contents.
     """
     return (
@@ -173,7 +173,7 @@ class Promise(object):
     Returns
     -------
     result : Future
-        Promise containing return result of `fn`
+        Future containing return result of `fn`.
     """
 
     result = Promise()
@@ -223,6 +223,7 @@ class Promise(object):
     Returns
     -------
     future : Future
+        Future encapsulating this Promise.
     """
     return Future(self)
 
@@ -279,9 +280,9 @@ class Promise(object):
     Returns
     -------
     result : Future
-        Resulting Future returned by apply `fn` to the exception, then setting
-        the return value to to `result`'s value. If this Promise is already
-        successful, its value is propagated onto `result`.
+        Resulting Future returned by applying `fn` to the exception, then
+        setting the return value to `result`'s value. If this Promise is
+        already successful, its value is propagated onto `result`.
     """
     return self.rescue(lambda v: Promise.call(fn, v))
 
@@ -340,7 +341,7 @@ class Promise(object):
     Returns
     -------
     result : Future
-        Promise resolving to a list of containing the values of this Promise and
+        Future resolving to a list of containing the values of this Promise and
         all other Promises. If any Promise fails, `result` holds the exception in
         the one which fails soonest.
     """
@@ -470,7 +471,7 @@ class Promise(object):
 
     Returns
     -------
-    self : Future
+    self : Promise
     """
     self.onsuccess(other.setvalue).onfailure(other.setexception)
     return self
@@ -487,8 +488,8 @@ class Promise(object):
 
     Returns
     -------
-    result : Promise
-        Resulting Promise returned by apply `fn` to the exception this Promise
+    result : Future
+        Resulting Future returned by apply `fn` to the exception this Promise
         contains. If this Promise is successful, its value is propagated onto
         `result`.
     """
@@ -753,7 +754,6 @@ class Promise(object):
     f.setexception(exc)
     return f.future()
 
-
   # COMBINING
   @classmethod
   def collect(cls, fs, timeout=None):
@@ -937,13 +937,13 @@ class Promise(object):
     first shut down.
 
     Parameters
-    ==========
+    ----------
     executor : concurrent.futures.Executor or None
         If None, retrieve the current executor, otherwise, shutdown the current
         Executor object and replace it with this argument.
 
     Returns
-    =======
+    -------
     executor : Executor
         Current executor
     """
@@ -957,6 +957,7 @@ class Promise(object):
 
 
 class Future(Promise):
+  """Read-only version of a Promise."""
 
   def __init__(self, promise):
     allowed_specials = [
