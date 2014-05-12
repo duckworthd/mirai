@@ -28,8 +28,8 @@ class PromiseConstructorTests(unittest.TestCase):
     def bar():
       raise NotImplementedError("Uh oh...")
 
-    self.assertRaises(NotImplementedError, Promise.call(bar).get, 0.05)
-    self.assertRaises(mirai.futures.ShadowException, Promise.call(bar).get, 0.05)
+    self.assertRaises(NotImplementedError, Promise.call(bar).get, 0.1)
+    self.assertRaises(MiraiError, Promise.call(bar).get, 0.1)
 
 
 class PromiseBasicTests(unittest.TestCase):
@@ -384,7 +384,7 @@ class PromiseMergingTests(unittest.TestCase):
 
 class FutureTests(unittest.TestCase):
 
-  def test(self):
+  def test_proxy(self):
     promise = Promise()
     future  = promise.future()
 
@@ -397,3 +397,8 @@ class FutureTests(unittest.TestCase):
     promise.setvalue(1)
 
     self.assertEqual(1, future.get(timeout=0.01))
+
+  def test_no_set(self):
+    future = Promise().future()
+    self.assertRaises(AttributeError, future.setvalue, 1)
+    self.assertRaises(AttributeError, future.setexception, Exception())

@@ -2,8 +2,9 @@ from concurrent import futures
 from concurrent.futures import TimeoutError
 import threading
 import time
-import joblib
-import sys
+
+from .exceptions import MiraiError, SafeFunction, AlreadyResolvedError
+from .utils import proxyto
 
 # Future methods:
 #   cancel()
@@ -26,20 +27,35 @@ import sys
 #   shutdown()
 
 
-class MiraiError(Exception):
-  """Base class for all exceptions raise by Promises"""
-  pass
-
-
-class AlreadyResolvedError(MiraiError):
-  """
-  Exception thrown when attempting to set the value or exception of a Promise
-  that has already had its value or exception set.
-  """
-  pass
-
-
 class Promise(object):
+  """
+  A `Promise` encapsulates the result of an asynchronous computation. Think of
+  it as a single-use mailbox -- you receive a promise which will later contain
+  a message.::
+
+    import requests
+    from mirai import Promise
+
+    def async_request(method, url, *args, **kwargs):
+      "fetch a url asynchronously using `requests`"
+
+      # construct a promise to fill later
+      promise = Promise()
+
+      def sync_request():
+        "fetches synchronously & propagates exceptions"
+        try:
+          response = requests.request(method, url, *args, **kwargs)
+          promise.setvalue(response)
+        except Exception as e:
+          promise.setexception(e)
+
+      # start asynchronous computation
+      Promise.call(sync_request)
+
+      # return read-only version of promise
+      return promise.future()
+  """
 
   EXECUTOR = futures.ThreadPoolExecutor(max_workers=10)
 
@@ -56,12 +72,12 @@ class Promise(object):
     not be called. Same as as `Promise.flatmap`.
 
     Parameters
-    ==========
+    ----------
     fn : (value,) -> Promise
         Function to apply. Takes 1 positional argument. Must return a Promise.
 
     Returns
-    =======
+    -------
     result : Promise
         Promise `fn` will return.
     """
@@ -74,19 +90,19 @@ class Promise(object):
     be raised. If this Promise failed, the set exception will be raised.
 
     Parameters
-    ==========
+    ----------
     timeout : number or None
         Number of seconds to wait until raising a `TimeoutError`. If `None`,
         then wait indefinitely.
 
     Returns
-    =======
+    -------
     result
         Contents of this future if it resolved successfully.
 
     Raises
-    ======
-    exception
+    ------
+    Exception
         Set exception if this future failed.
     """
     return self.get(timeout)
@@ -97,14 +113,14 @@ class Promise(object):
     regardless of whether or not it completes successfuly.
 
     Parameters
-    ==========
+    ----------
     fn : (,) -> None
         function to apply upon Promise completion. takes no arguments. Return
         value ignored.
 
     Returns
-    =======
-    self : Promise
+    -------
+    self : Future
     """
     def ensure(v):
       try:
@@ -121,12 +137,12 @@ class Promise(object):
     the resulting Promise fails with a `MiraiError`.
 
     Parameters
-    ==========
+    ----------
     fn : (value,) -> bool
         function used to check `self.get()`. Must return a boolean-like value.
 
     Returns
-    =======
+    -------
     result : Promise
         Promise whose contents are the contents of this Promise if `fn` evaluates
         truth on this Promise's contents.
@@ -150,13 +166,13 @@ class Promise(object):
     not be called.
 
     Parameters
-    ==========
+    ----------
     fn : (value,) -> Promise
         Function to apply. Takes 1 positional argument. Must return a Promise.
 
     Returns
-    =======
-    result : Promise
+    -------
+    result : Future
         Promise containing return result of `fn`
     """
 
@@ -181,19 +197,20 @@ class Promise(object):
     self.onsuccess(populate)
     self.onfailure(result.setexception)
 
-    return result
+    return result.future()
+
   def foreach(self, fn):
     """
     Apply a function if this Promise resolves successfully. The function
     receives the contents of this Promise as its only argument.
 
     Parameters
-    ==========
+    ----------
     fn : (value,) -> None
         Function to apply to this Promise's contents. Return value ignored.
 
     Returns
-    =======
+    -------
     None
     """
     self.onsuccess(fn)
@@ -204,7 +221,7 @@ class Promise(object):
     version of the exact same thing.
 
     Returns
-    =======
+    -------
     future : Future
     """
     return Future(self)
@@ -216,19 +233,19 @@ class Promise(object):
     be raised. If this Promise failed, the set exception will be raised.
 
     Parameters
-    ==========
+    ----------
     timeout : number or None
         Number of seconds to wait until raising a `TimeoutError`. If `None`,
         then wait indefinitely.
 
     Returns
-    =======
-    result
+    -------
+    result : anything
         Contents of this future if it resolved successfully.
 
     Raises
-    ======
-    exception
+    ------
+    Exception
         Set exception if this future failed.
     """
     return self._future.result(timeout)
@@ -239,7 +256,7 @@ class Promise(object):
     fails, returns a default value.
 
     Parameters
-    ==========
+    ----------
     default : anything
         default value to return in case of time
     """
@@ -254,15 +271,15 @@ class Promise(object):
     successful value.
 
     Parameters
-    ==========
+    ----------
     fn : (exception,) -> anything
         Function applied to recover from a failed exception. Its return value
         will be the value of the resulting Promise.
 
     Returns
-    =======
-    result : Promise
-        Resulting Promise returned by apply `fn` to the exception, then setting
+    -------
+    result : Future
+        Resulting Future returned by apply `fn` to the exception, then setting
         the return value to to `result`'s value. If this Promise is already
         successful, its value is propagated onto `result`.
     """
@@ -274,7 +291,7 @@ class Promise(object):
     unsuccessfully.
 
     Returns
-    =======
+    -------
     result : bool
     """
     return self._future.done()
@@ -285,7 +302,7 @@ class Promise(object):
     it's not yet resolved.
 
     Returns
-    =======
+    -------
     result : bool
     """
     v = self.issuccess()
@@ -298,7 +315,7 @@ class Promise(object):
     it's not yet resolved.
 
     Returns
-    =======
+    -------
     result : bool
     """
     if not self.isdefined():
@@ -316,32 +333,33 @@ class Promise(object):
     Results are in the same order `[self] + others` is in.
 
     Parameters
-    ==========
+    ----------
     others : 1 or more Promises
         Promises to combine with this Promise.
 
     Returns
-    =======
-    result : Promise
+    -------
+    result : Future
         Promise resolving to a list of containing the values of this Promise and
         all other Promises. If any Promise fails, `result` holds the exception in
         the one which fails soonest.
     """
-    return self.collect([self] + list(others))
+    return Promise.collect([self] + list(others))
 
   def map(self, fn):
     """
-    Transform this Promise by applying a function to its value
+    Transform this Promise by applying a function to its value. If this Promise
+    contains an exception, `fn` is not applied.
 
     Parameters
-    ==========
+    ----------
     fn : (value,) -> anything
         Function to apply to this Promise's value on completion.
 
     Returns
-    =======
-    result : Promise
-        Promise containing `fn` applied to this Promise's value. If this Promise
+    -------
+    result : Future
+        Future containing `fn` applied to this Promise's value. If this Promise
         fails, the exception is propagated.
     """
     result = Promise()
@@ -355,7 +373,7 @@ class Promise(object):
     self.onsuccess(map)
     self.onfailure(result.setexception)
 
-    return result
+    return result.future()
 
   def onfailure(self, fn):
     """
@@ -363,13 +381,13 @@ class Promise(object):
     Promise has resolved.
 
     Parameters
-    ==========
+    ----------
     fn : (exception,) -> None
         Function to call upon failure. Its only argument is the exception set
         to this Promise. If this future succeeds, `fn` will not be called.
 
     Returns
-    =======
+    -------
     self : Promise
     """
     def onfailure(fut):
@@ -387,13 +405,13 @@ class Promise(object):
     Promise has resolved.
 
     Parameters
-    ==========
+    ----------
     fn : (value,) -> None
         Function to call upon success. Its only argument is the value set
         to this Promise. If this future fails, `fn` will not be called.
 
     Returns
-    =======
+    -------
     self : Promise
     """
     def onsuccess(fut):
@@ -411,13 +429,13 @@ class Promise(object):
     other Promises.
 
     Parameters
-    ==========
+    ----------
     others : one or more Promises
         Other futures to consider.
 
     Returns
-    =======
-    result : Promise
+    -------
+    result : Future
         First future that is resolved, successfully or otherwise.
     """
     result = Promise()
@@ -439,26 +457,23 @@ class Promise(object):
         result.setexception(e)
 
     Promise.call(or_)
-    return result
+    return result.future()
 
   def proxyto(self, other):
     """
     Copy the state of this Promise to another.
 
     Parameters
-    ==========
+    ----------
     other : Promise
         Another Promise to copy the state of this Promise to, upon completion.
 
     Returns
-    =======
-    self : Promise
+    -------
+    self : Future
     """
     self.onsuccess(other.setvalue).onfailure(other.setexception)
     return self
-
-  def promise(self):
-    return Promise(self)
 
   def rescue(self, fn):
     """
@@ -466,12 +481,12 @@ class Promise(object):
     (potentially successful) Promise. Same as `Promise.handle`.
 
     Parameters
-    ==========
+    ----------
     fn : (exception,) -> Promise
         Function applied to recover from a failed exception. Must return a Promise.
 
     Returns
-    =======
+    -------
     result : Promise
         Resulting Promise returned by apply `fn` to the exception this Promise
         contains. If this Promise is successful, its value is propagated onto
@@ -498,19 +513,19 @@ class Promise(object):
     self.onsuccess(result.setvalue)
     self.onfailure(rescue)
 
-    return result
+    return result.future()
 
   def respond(self, fn):
     """
     Apply a function to this Promise when it's resolved.
 
     Parameters
-    ==========
+    ----------
     fn : (future,) -> None
         Function to apply to this Promise upon completion. Return value is ignored
 
     Returns
-    =======
+    -------
     self : Promise
     """
     def respond(fut):
@@ -525,13 +540,13 @@ class Promise(object):
     other Promises.
 
     Parameters
-    ==========
+    ----------
     others : one or more Promises
         Other futures to consider.
 
     Returns
-    =======
-    result : Promise
+    -------
+    result : Future
         First future that is resolved, successfully or otherwise.
     """
     return self.or_(*others)
@@ -543,11 +558,11 @@ class Promise(object):
     operation is thread (but not process) safe.
 
     Parameters
-    ==========
+    ----------
     e : Exception
 
     Returns
-    =======
+    -------
     self : Promise
     """
     self._lock.acquire()
@@ -562,15 +577,15 @@ class Promise(object):
   def setvalue(self, val):
     """
     Set the state of this Promise as successful with a given value. State can
-    only be set once; once a Promise is defined, it cannot be redefined.This
+    only be set once; once a Promise is defined, it cannot be redefined. This
     operation is thread (but not process) safe.
 
     Parameters
-    ==========
+    ----------
     val : value
 
     Returns
-    =======
+    -------
     self : Promise
     """
     self._lock.acquire()
@@ -587,8 +602,8 @@ class Promise(object):
     Convert this Promise to another that disregards its result.
 
     Returns
-    =======
-    result : Promise
+    -------
+    result : Future
         Promise with a value of `None` if this Promise succeeds. If this Promise
         fails, the exception is propagated.
     """
@@ -601,19 +616,19 @@ class Promise(object):
       )
     except Exception as e:
       result.setexception(e)
-    return result
+    return result.future()
 
   def update(self, other):
     """
     Populate this Promise with the contents of another.
 
     Parameters
-    ==========
+    ----------
     other : Promise
         Promise to copy
 
     Returns
-    =======
+    -------
     self : Promise
     """
     other.proxyto(self)
@@ -624,12 +639,12 @@ class Promise(object):
     Like `Promise.update`, but update only if this Promise isn't already defined.
 
     Parameters
-    ==========
+    ----------
     other : Promise
         Promise to copy, if necessary.
 
     Returns
-    =======
+    -------
     self : Promise
     """
     def setvalue(v):
@@ -659,12 +674,12 @@ class Promise(object):
     resulting Promise will fail with a `TimeoutError`.
 
     Parameters
-    ==========
+    ----------
     duration : number
         Number of seconds to wait before resolving a `TimeoutError`
 
     Returns
-    =======
+    -------
     result : Promise
         Promise guaranteed to resolve in `duration` seconds.
     """
@@ -678,18 +693,18 @@ class Promise(object):
     Construct a Promise that is already resolved successfully to a value.
 
     Parameters
-    ==========
+    ----------
     val : anything
         Value to resolve new Promise to.
 
     Returns
-    =======
-    result : Promise
-        Promise containing `val` as its value.
+    -------
+    result : Future
+        Future containing `val` as its value.
     """
     f = cls()
     f.setvalue(val)
-    return f
+    return f.future()
 
   @classmethod
   def wait(cls, duration):
@@ -697,13 +712,13 @@ class Promise(object):
     Construct a Promise that succeeds in `duration` seconds with value `None`.
 
     Parameters
-    ==========
+    ----------
     duration : number
         Number of seconds to wait before resolving a `TimeoutError`
 
     Returns
-    =======
-    result : Promise
+    -------
+    result : Future
         Promise that will resolve in `duration` seconds with value `None`.
     """
     result = cls()
@@ -715,8 +730,9 @@ class Promise(object):
       except Exception as e:
         result.setexception(e)
 
-    threading.Thread(target=wait).start()
-    return result
+    cls.call(wait)
+
+    return result.future()
 
   @classmethod
   def exception(cls, exc):
@@ -724,18 +740,18 @@ class Promise(object):
     Construct a Promise that has already failed with a given exception.
 
     Parameters
-    ==========
+    ----------
     exc : Exception
         Exception to fail new Promise with
 
     Returns
-    =======
-    result : Promise
+    -------
+    result : Future
         New Promise that has already failed with the given exception.
     """
     f = cls()
     f.setexception(exc)
-    return f
+    return f.future()
 
 
   # COMBINING
@@ -748,7 +764,7 @@ class Promise(object):
     latter case, the failing Promise's exception is propagated.
 
     Parameters
-    ==========
+    ----------
     fs : [Promise]
         List of Promises to merge.
     timeout : number or None
@@ -756,11 +772,11 @@ class Promise(object):
         resulting Promise. If `None`, wait indefinitely.
 
     Returns
-    =======
-    result : Promise
-        Promise containing values of all Promises in `fs`. If any Promise in `fs`
+    -------
+    result : Future
+        Future containing values of all Futures in `fs`. If any Future in `fs`
         fails, `result` fails with the same exception. If `timeout` seconds
-        pass before all Promises in `fs` resolve, `result` fails with a
+        pass before all Futures in `fs` resolve, `result` fails with a
         `TimeoutError`.
     """
     # create a result future, then create a task that gets all the futures'
@@ -792,8 +808,8 @@ class Promise(object):
       except Exception as e:
         result.setexception(e)
 
-    Promise.call(collect)
-    return result
+    cls.call(collect)
+    return result.future()
 
   @classmethod
   def join(cls, fs, timeout=None):
@@ -804,7 +820,7 @@ class Promise(object):
     resulting Promise fails with a `TimeoutError`.
 
     Parameters
-    ==========
+    ----------
     fs : [Promise]
         List of Promises to merge.
     timeout : number or None
@@ -812,11 +828,11 @@ class Promise(object):
         resulting Promise. If `None`, wait indefinitely.
 
     Returns
-    =======
-    result : Promise
-        Promise containing None if all Promises in `fs` succeed, the exception of
-        the first failing Promise in `fs`, or a `TimeoutError` if `timeout`
-        seconds pass before all Promises in `fs` resolve.
+    -------
+    result : Future
+        Future containing None if all Futures in `fs` succeed, the exception of
+        the first failing Future in `fs`, or a `TimeoutError` if `timeout`
+        seconds pass before all Futures in `fs` resolve.
     """
     result = cls()
 
@@ -845,8 +861,8 @@ class Promise(object):
       except Exception as e:
         result.setexception(e)
 
-    Promise.call(join)
-    return result
+    cls.call(join)
+    return result.future()
 
   @classmethod
   def select(cls, fs, timeout=None):
@@ -858,7 +874,7 @@ class Promise(object):
     Promise is not guaranteed to have completed successfully.
 
     Parameters
-    ==========
+    ----------
     fs : [Promise]
         List of Promises to merge.
     timeout : number or None
@@ -866,10 +882,10 @@ class Promise(object):
         resulting Promise. If `None`, wait indefinitely.
 
     Returns
-    =======
-    result : Promise
-        Promise containing the first Promise in `fs` to finish and all remaining
-        (potentially) unresolved Promises as a tuple of 2 elements for its value
+    -------
+    result : Future
+        Future containing the first Future in `fs` to finish and all remaining
+        (potentially) unresolved Futures as a tuple of 2 elements for its value
         or a `TimeoutError` for its exception.
     """
     result = cls()
@@ -886,11 +902,11 @@ class Promise(object):
       except Exception as e:
         result.setexception(e)
 
-    Promise.call(select)
-    return result
+    cls.call(select)
+    return result.future()
 
   @classmethod
-  def call(self, fn, *args, **kwargs):
+  def call(cls, fn, *args, **kwargs):
     """
     Call a function asynchronously and return a Promise with its result. If an
     exception is thrown inside `fn`, a new exception type will be constructed
@@ -900,19 +916,19 @@ class Promise(object):
     thrown.
 
     Parameters
-    ==========
+    ----------
     fn : function
         Function to be called
     *args : arguments
     **kwargs : keyword arguments
 
     Returns
-    =======
-    result : Promise
-        Promise containing the result of `fn(*args, **kwargs)` as its value or
+    -------
+    result : Future
+        Future containing the result of `fn(*args, **kwargs)` as its value or
         the exception thrown as its exception.
     """
-    return Promise(self.EXECUTOR.submit(SafeFunction(fn), *args, **kwargs))
+    return cls(cls.EXECUTOR.submit(SafeFunction(fn), *args, **kwargs)).future()
 
   @classmethod
   def executor(cls, executor=None):
@@ -940,92 +956,20 @@ class Promise(object):
       return cls.EXECUTOR
 
 
-class Future(object):
+class Future(Promise):
 
   def __init__(self, promise):
-    self._promise = promise
+    allowed_specials = [
+      '__str__',
+      '__unicode__',
+      '__repr__',
+      '__call__',
+    ]
+    proxyto(self, promise, allowed_specials)
 
-  def __getattr__(self, key):
-    if key not in ['setexception', 'setvalue']:
-      return getattr(self._promise, key)
-    else:
-      raise AttributeError("Futures are read only; Promises are writable")
+  def setvalue(self, val):
+    raise AttributeError("Futures are read only; Promises are writable")
 
+  def setexception(self, val):
+    raise AttributeError("Futures are read only; Promises are writable")
 
-class SafeFunction(object):
-  """
-  A function-like object that catches all errors and adds their execution stack
-  description to their message.
-  """
-
-  def __init__(self, f):
-    self.f = f
-
-  def __call__(self, *args, **kwargs):
-    try:
-      return self.f(*args, **kwargs)
-    except Exception as e:
-      e_type, e_value, e_tb = sys.exc_info()
-
-      # turn stack into a string
-      text = joblib.format_stack.format_exc(e_type, e_value, e_tb, context=10, tb_offset=1)
-
-      # manually delete e_tb (failing to do so will cause a memory leak. See
-      # documentation for sys.exc_info())
-      del e_tb
-
-      # construct a new exception instance that's of the same class as the one
-      # thrown, but also with additional context.
-      raise ShadowException.build(e, text)
-
-
-class ShadowException(MiraiError):
-  """
-  An exception that's never used directly. In particular, a ShadowException is
-  used to wrap a thrown exception and allow it to store the traceback context
-  as a string so that users of Promise will have some idea what's going on.
-
-  Parameters
-  ----------
-  exception : Exception
-      Other exception to wrap
-  context : string
-      Formatted string containing the traceback that caused `other` to be thrown
-  """
-
-  def __init__(self, exception, context):
-    self.exception   = exception
-    self.context = context
-
-  def __unicode__(self):
-    return u"{cls}: {msg}\n{ctx}".format(
-      cls = self.__class__.__name__,
-      msg = self.message,
-      ctx = self.context,
-    )
-
-  def __str__(self):
-    return unicode(self)
-
-  def __repr__(self):
-    return u"{cls}({msg})".format(
-      cls = self.__class__.__name__,
-      msg = self.message,
-    )
-
-  def __getattr__(self, key):
-    return getattr(self.exception, key)
-
-  @staticmethod
-  def build(exception, context):
-    """
-    Construct a child class of a thrown exception and ShadowException, and
-    instantiate it.
-    """
-    cls = exception.__class__
-    t = type(
-      "Mirai" + cls.__name__,
-      (ShadowException, cls),
-      {}
-    )
-    return t(exception, context)
