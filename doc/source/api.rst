@@ -6,20 +6,44 @@ API
 This part of the documentation shows the full API reference of all public
 classes and functions.
 
-Promise
--------
+Creating Promises
+-----------------
+
+.. automethod:: Promise.value
+.. automethod:: Promise.exception
+.. automethod:: Promise.call
+.. automethod:: Promise.wait
+
+Using Promises
+--------------
 
 .. autoclass:: Promise
-   :members:
+  :members: andthen, ensure, filter, flatmap, foreach, future, get, getorelse, \
+    handle, isdefined, isfailure, issuccess, join_, map, onfailure, onsuccess, \
+    or_, proxyto, rescue, respond, select_, setexception, setvalue, unit,      \
+    update, updateifempty, within
+
+Combining Promises
+------------------
+
+.. automethod:: Promise.collect
+.. automethod:: Promise.join
+.. automethod:: Promise.select
+
+Thread Management
+-----------------
+
+.. autoclass:: Promise
+  :members: executor
 
 Exceptions
 ----------
 
-.. autoclass:: MiraiError
+.. autoexception:: MiraiError
    :members:
 
-.. autoclass:: AlreadyResolvedError
+.. autoexception:: AlreadyResolvedError
    :members:
 
-.. autoclass:: TimeoutError
+.. autoexception:: TimeoutError
    :members:
