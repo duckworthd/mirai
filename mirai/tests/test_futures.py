@@ -4,7 +4,16 @@ import unittest
 from mirai import *
 
 
-class PromiseConstructorTests(unittest.TestCase):
+class PromiseTests(object):
+
+  def setUp(self):
+    Promise.executor(ThreadPoolExecutor(max_workers=10))
+
+  def tearDown(self):
+    Promise.executor().shutdown(wait=False)
+
+
+class PromiseConstructorTests(PromiseTests, unittest.TestCase):
 
   def test_value(self):
     self.assertEqual(Promise.value(1).get(), 1)
@@ -31,7 +40,7 @@ class PromiseConstructorTests(unittest.TestCase):
     self.assertRaises(MiraiError, Promise.call(bar).get, 0.1)
 
 
-class PromiseBasicTests(unittest.TestCase):
+class PromiseBasicTests(PromiseTests, unittest.TestCase):
 
   def test_setvalue(self):
     o    = object()
@@ -111,7 +120,7 @@ class PromiseBasicTests(unittest.TestCase):
     self.assertRaises(MiraiError, fut1.get, 0.1)
 
 
-class PromiseCallbackTests(unittest.TestCase):
+class PromiseCallbackTests(PromiseTests, unittest.TestCase):
 
   def test_onsuccess_success(self):
     fut1 = Promise()
@@ -143,7 +152,7 @@ class PromiseCallbackTests(unittest.TestCase):
     self.assertEqual(fut1.get(), e)
 
 
-class PromiseMapTests(unittest.TestCase):
+class PromiseMapTests(PromiseTests, unittest.TestCase):
 
   def test_flatmap_success(self):
     fut1 = Promise.value(1)
@@ -170,7 +179,7 @@ class PromiseMapTests(unittest.TestCase):
     self.assertRaises(Exception, fut2.get)
 
 
-class PromiseMiscellaneousTests(unittest.TestCase):
+class PromiseMiscellaneousTests(PromiseTests, unittest.TestCase):
 
   def test_rescue_success(self):
     fut1 = Promise.value("A")
@@ -252,8 +261,51 @@ class PromiseMiscellaneousTests(unittest.TestCase):
     new = Promise.executor(ThreadPoolExecutor(max_workers=10))
     self.assertEqual(Promise.call(lambda v: v+1, 1).get(0.05), 2)
 
+  def test_within_many_threads(self):
+    # ensure's that within actually works, even when other threads are waiting.
+    import time
 
-class PromiseAlternativeNamesTests(unittest.TestCase):
+    Promise.executor(ThreadPoolExecutor(max_workers=20))
+    promises = [
+      Promise.call(time.sleep, 0.25 if i < 5 else 0.75)
+      for i in range(10)
+    ]
+    promise = (
+      Promise.collect(promises)
+      .within(0.5)
+      .handle(lambda err: "yay")
+    )
+    self.assertEqual("yay", promise.get())
+
+  def test_within_few_threads(self):
+    # ensure that code doesn't lock up if I create far more threads than I have
+    # workers.
+    import time
+
+    Promise.executor(ThreadPoolExecutor(max_workers=5))
+
+    def another(i):
+      # sleep a little, and a bunch of callbacks
+      if i <= 0:
+        return Promise.value("done")
+      else:
+        result = Promise.call(create, i-1)
+        for i in range(i):
+          result = result.map(lambda i: i)
+        time.sleep(0.05)
+        return result
+
+    promises = [Promise.call(another, i) for i in range(10)]
+    promise  = (
+      Promise.collect(promises)
+      .within(0.25)
+      .handle(lambda err: "yay")
+    )
+
+    self.assertEqual("yay", promise.get())
+
+
+class PromiseAlternativeNamesTests(PromiseTests, unittest.TestCase):
 
   def test_andthen(self):
     self.assertEqual(
@@ -330,7 +382,7 @@ class PromiseAlternativeNamesTests(unittest.TestCase):
     )
 
 
-class PromiseMergingTests(unittest.TestCase):
+class PromiseMergingTests(PromiseTests, unittest.TestCase):
 
   def test_collect_success(self):
     fut1 = [Promise.value(1), Promise.value(2), Promise.value(3)]
@@ -381,7 +433,7 @@ class PromiseMergingTests(unittest.TestCase):
     )
 
 
-class FutureTests(unittest.TestCase):
+class FutureTests(PromiseTests, unittest.TestCase):
 
   def test_proxy(self):
     promise = Promise()
@@ -401,3 +453,7 @@ class FutureTests(unittest.TestCase):
     future = Promise().future()
     self.assertRaises(AttributeError, future.setvalue, 1)
     self.assertRaises(AttributeError, future.setexception, Exception())
+
+
+if __name__ == '__main__':
+  unittest.main()
