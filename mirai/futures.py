@@ -684,8 +684,23 @@ class Promise(object):
     result : Promise
         Promise guaranteed to resolve in `duration` seconds.
     """
+    result = Promise()
     e = TimeoutError("Promise did not finish in {} seconds".format(duration))
-    return self.or_(Promise.wait(duration).flatmap(lambda v: Promise.exception(e)))
+
+    (
+      Promise
+      .wait(duration)
+      .onsuccess(lambda v: result.updateifempty(Promise.exception(e)))
+      .onfailure(lambda e: result.updateifempty(Promise.exception(e)))
+    )
+
+    (
+      self
+      .onsuccess(lambda v: result.updateifempty(Promise.value(v)))
+      .onfailure(lambda e: result.updateifempty(Promise.exception(e)))
+    )
+
+    return result
 
   # CONSTRUCTORS
   @classmethod
