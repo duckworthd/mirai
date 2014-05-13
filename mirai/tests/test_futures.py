@@ -195,7 +195,7 @@ class PromiseMiscellaneousTests(PromiseTests, unittest.TestCase):
 
   def test_within_success(self):
     fut1 = Promise.value("A")
-    fut2 = fut1.within(0)
+    fut2 = fut1.within(0.5)
 
     self.assertEqual(fut2.get(), "A")
 
@@ -373,11 +373,11 @@ class PromiseAlternativeNamesTests(PromiseTests, unittest.TestCase):
 
   def test_select_(self):
     self.assertEqual(
-      Promise.wait(0.15).flatmap(lambda v: Promise.exception(MiraiError()))
+      Promise.wait(0.50).flatmap(lambda v: Promise.exception(MiraiError()))
       .select_(
         Promise.wait(0.05).map(lambda v: 2),
-        Promise.wait(0.10).map(lambda v: 3),
-      ).get(0.2),
+        Promise.wait(0.90).map(lambda v: 3),
+      ).get(0.40),
       2,
     )
 
@@ -426,11 +426,27 @@ class PromiseMergingTests(PromiseTests, unittest.TestCase):
   def test_or_(self):
     self.assertEqual(
       Promise.wait(0.05).map(lambda v: 1).or_(
-        Promise.wait(0.10).map(lambda v: 2),
-        Promise.wait(0.15).map(lambda v: 3),
-      ).get(0.2),
+        Promise.wait(0.25).map(lambda v: 2),
+        Promise.wait(0.50).map(lambda v: 3),
+      ).get(0.1),
       1,
     )
+
+  def test_select_few_threads(self):
+    # this ensures that Promise.select won't cause a threadlock if all workers
+    # are busy with the threads it's waiting on.
+    Promise.executor(ThreadPoolExecutor(max_workers=2))
+
+    promises = [
+      Promise.select([
+        Promise.wait(1.0).map(lambda v: v),
+        Promise.wait(0.1).map(lambda v: "yay"),
+      ])
+      .flatmap(lambda (winner, losers): winner)
+      for i in range(2)
+    ]
+
+    self.assertEqual(["yay"] * 2, Promise.collect(promises).get(2.5))
 
 
 class FutureTests(PromiseTests, unittest.TestCase):

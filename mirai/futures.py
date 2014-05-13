@@ -450,7 +450,8 @@ class Promise(object):
 
       try:
         (
-          Promise.select([self] + list(others))
+          Promise
+          .select([self] + list(others))
           .onsuccess(setresult)
           .onfailure(result.setexception)
         )
@@ -684,23 +685,8 @@ class Promise(object):
     result : Promise
         Promise guaranteed to resolve in `duration` seconds.
     """
-    result = Promise()
     e = TimeoutError("Promise did not finish in {} seconds".format(duration))
-
-    (
-      Promise
-      .wait(duration)
-      .onsuccess(lambda v: result.updateifempty(Promise.exception(e)))
-      .onfailure(lambda e: result.updateifempty(Promise.exception(e)))
-    )
-
-    (
-      self
-      .onsuccess(lambda v: result.updateifempty(Promise.value(v)))
-      .onfailure(lambda e: result.updateifempty(Promise.exception(e)))
-    )
-
-    return result
+    return self.or_(Promise.wait(duration).flatmap(lambda v: Promise.exception(e)))
 
   # CONSTRUCTORS
   @classmethod
@@ -737,18 +723,14 @@ class Promise(object):
     result : Future
         Promise that will resolve in `duration` seconds with value `None`.
     """
-    result = cls()
-
     def wait():
       try:
         time.sleep(duration)
-        result.setvalue(None)
+        return None
       except Exception as e:
-        result.setexception(e)
+        raise e
 
-    cls.call(wait)
-
-    return result.future()
+    return Promise.call(wait).future()
 
   @classmethod
   def exception(cls, exc):
@@ -770,6 +752,46 @@ class Promise(object):
     return f.future()
 
   # COMBINING
+  @classmethod
+  def _wait(cls, fs, timeout=None, return_when=futures.FIRST_EXCEPTION):
+    """
+    Return a future that contains a partition of `fs` into complete and
+    incomplete promises.
+
+    Parameters
+    ----------
+    fs : [Promise]
+        List of promises to wait upon
+    timeout : float or None
+        number of seconds to wait before setting result's value
+
+    Returns
+    -------
+    result : Future
+        Future containing a 2-element tuple. The first element is a list of
+        compeleted concurrent.futures.Future, the second is a list of
+        incomplete ones.
+    """
+
+    result = cls()
+
+    def wait():
+      try:
+        _futures = [f._future for f in fs]
+        complete, incomplete = futures.wait(_futures, timeout=timeout, return_when=return_when)
+        result.setvalue( (list(complete), list(incomplete)) )
+      except Exception as e:
+        result.setexception(e)
+
+    # This method needs to live outside of the Promise.EXECUTOR as a race
+    # condition can arise if there len(fs) == n and max_workers == n as
+    # Promise.call(select) would be the n+1 st thread, causing a lock.
+    thread = threading.Thread(target=wait)
+    thread.daemon = True
+    thread.start()
+
+    return result.future()
+
   @classmethod
   def collect(cls, fs, timeout=None):
     """
@@ -794,37 +816,35 @@ class Promise(object):
         pass before all Futures in `fs` resolve, `result` fails with a
         `TimeoutError`.
     """
-    # create a result future, then create a task that gets all the futures'
-    # values and sets it to result future's ouptut
-    result = cls()
 
-    def collect():
+    def collect((complete, incomplete)):
       try:
-        _futures = [f._future for f in fs]
-        complete, incomplete = futures.wait(_futures, timeout=timeout, return_when=futures.FIRST_EXCEPTION)
-
-        # 1 or more finished with failures
         failed = [c for c in complete if cls(c).isfailure()]
         if len(failed) > 0:
-          cls(failed[0]).onfailure(result.setexception)
+          # one or more futures failed
+          return cls(failed[0])
 
-        # didn't finish in time
         elif len(incomplete) > 0:
+          # not all futures finished
           m, n = len(complete), len(incomplete)
-          result.setexception(TimeoutError(
-            "{} of {} futures failed to complete in {} seconds."
-            .format(n, n+m, timeout)
-          ))
+          return cls.exception(
+            TimeoutError(
+              "{} of {} futures failed to complete in {} seconds."
+              .format(n, n+m, timeout)
+            )
+          )
 
-        # all futures succeeded
         else:
-          result.setvalue([f.get(timeout=0) for f in fs])
-
+          # all futures succeeded
+          return cls.value([f.get(timeout=0) for f in fs])
       except Exception as e:
-        result.setexception(e)
+        return cls.exception(e)
 
-    cls.call(collect)
-    return result.future()
+    return (
+      cls
+      ._wait(fs, timeout=timeout)
+      .flatmap(collect)
+    )
 
   @classmethod
   def join(cls, fs, timeout=None):
@@ -849,35 +869,7 @@ class Promise(object):
         the first failing Future in `fs`, or a `TimeoutError` if `timeout`
         seconds pass before all Futures in `fs` resolve.
     """
-    result = cls()
-
-    def join():
-      try:
-        _futures = [f._future for f in fs]
-        complete, incomplete = futures.wait(_futures, timeout=timeout, return_when=futures.FIRST_EXCEPTION)
-
-        # 1 or more finished with failures
-        failed = [c for c in complete if cls(c).isfailure()]
-        if len(failed) > 0:
-          cls(failed[0]).onfailure(result.setexception)
-
-        # didn't finish in time
-        elif len(incomplete) > 0:
-          m, n = len(complete), len(incomplete)
-          result.setexception(TimeoutError(
-            "{} of {} futures failed to complete in {} seconds."
-            .format(n, n+m, timeout)
-          ))
-
-        # all good
-        else:
-          result.setvalue(None)
-
-      except Exception as e:
-        result.setexception(e)
-
-    cls.call(join)
-    return result.future()
+    return cls.collect(fs, timeout=timeout).map(lambda v: None)
 
   @classmethod
   def select(cls, fs, timeout=None):
@@ -903,22 +895,27 @@ class Promise(object):
         (potentially) unresolved Futures as a tuple of 2 elements for its value
         or a `TimeoutError` for its exception.
     """
-    result = cls()
 
-    def select():
+    def select((complete, incomplete)):
       try:
-        _futures = [f._future for f in fs]
-        complete, incomplete = futures.wait(_futures, timeout=timeout, return_when=futures.FIRST_COMPLETED)
-
-        complete, incomplete = map(list, [complete, incomplete])
-        complete, incomplete = complete[0], list(incomplete) + list(complete[1:])
-
-        result.setvalue( (cls(complete), map(cls, incomplete)) )
+        if len(complete) > 0:
+          complete, incomplete = complete[0], incomplete + complete[1:]
+          return cls.value( (cls(complete), map(cls, incomplete)) )
+        else:
+          return cls.exception(
+            TimeoutError(
+              "No future finished in Promise.select in {} seconds"
+              .format(timeout)
+            )
+          )
       except Exception as e:
-        result.setexception(e)
+        return cls.exception(e)
 
-    cls.call(select)
-    return result.future()
+    return (
+      cls
+      ._wait(fs, timeout=timeout, return_when=futures.FIRST_COMPLETED)
+      .flatmap(select)
+    )
 
   @classmethod
   def call(cls, fn, *args, **kwargs):
