@@ -2,10 +2,18 @@ from concurrent.futures import ThreadPoolExecutor
 import unittest
 
 from mirai import *
-import mirai
 
 
-class PromiseConstructorTests(unittest.TestCase):
+class PromiseTests(object):
+
+  def setUp(self):
+    Promise.executor(ThreadPoolExecutor(max_workers=10))
+
+  def tearDown(self):
+    Promise.executor().shutdown(wait=False)
+
+
+class PromiseConstructorTests(PromiseTests, unittest.TestCase):
 
   def test_value(self):
     self.assertEqual(Promise.value(1).get(), 1)
@@ -28,11 +36,11 @@ class PromiseConstructorTests(unittest.TestCase):
     def bar():
       raise NotImplementedError("Uh oh...")
 
-    self.assertRaises(NotImplementedError, Promise.call(bar).get, 0.05)
-    self.assertRaises(mirai.futures.ShadowException, Promise.call(bar).get, 0.05)
+    self.assertRaises(NotImplementedError, Promise.call(bar).get, 0.1)
+    self.assertRaises(MiraiError, Promise.call(bar).get, 0.1)
 
 
-class PromiseBasicTests(unittest.TestCase):
+class PromiseBasicTests(PromiseTests, unittest.TestCase):
 
   def test_setvalue(self):
     o    = object()
@@ -112,7 +120,7 @@ class PromiseBasicTests(unittest.TestCase):
     self.assertRaises(MiraiError, fut1.get, 0.1)
 
 
-class PromiseCallbackTests(unittest.TestCase):
+class PromiseCallbackTests(PromiseTests, unittest.TestCase):
 
   def test_onsuccess_success(self):
     fut1 = Promise()
@@ -144,7 +152,7 @@ class PromiseCallbackTests(unittest.TestCase):
     self.assertEqual(fut1.get(), e)
 
 
-class PromiseMapTests(unittest.TestCase):
+class PromiseMapTests(PromiseTests, unittest.TestCase):
 
   def test_flatmap_success(self):
     fut1 = Promise.value(1)
@@ -171,7 +179,7 @@ class PromiseMapTests(unittest.TestCase):
     self.assertRaises(Exception, fut2.get)
 
 
-class PromiseMiscellaneousTests(unittest.TestCase):
+class PromiseMiscellaneousTests(PromiseTests, unittest.TestCase):
 
   def test_rescue_success(self):
     fut1 = Promise.value("A")
@@ -187,7 +195,7 @@ class PromiseMiscellaneousTests(unittest.TestCase):
 
   def test_within_success(self):
     fut1 = Promise.value("A")
-    fut2 = fut1.within(0)
+    fut2 = fut1.within(0.5)
 
     self.assertEqual(fut2.get(), "A")
 
@@ -253,8 +261,51 @@ class PromiseMiscellaneousTests(unittest.TestCase):
     new = Promise.executor(ThreadPoolExecutor(max_workers=10))
     self.assertEqual(Promise.call(lambda v: v+1, 1).get(0.05), 2)
 
+  def test_within_many_threads(self):
+    # ensure's that within actually works, even when other threads are waiting.
+    import time
 
-class PromiseAlternativeNamesTests(unittest.TestCase):
+    Promise.executor(ThreadPoolExecutor(max_workers=20))
+    promises = [
+      Promise.call(time.sleep, 0.25 if i < 5 else 0.75)
+      for i in range(10)
+    ]
+    promise = (
+      Promise.collect(promises)
+      .within(0.5)
+      .handle(lambda err: "yay")
+    )
+    self.assertEqual("yay", promise.get())
+
+  def test_within_few_threads(self):
+    # ensure that code doesn't lock up if I create far more threads than I have
+    # workers.
+    import time
+
+    Promise.executor(ThreadPoolExecutor(max_workers=5))
+
+    def another(i):
+      # sleep a little, and a bunch of callbacks
+      if i <= 0:
+        return Promise.value("done")
+      else:
+        result = Promise.call(create, i-1)
+        for i in range(i):
+          result = result.map(lambda i: i)
+        time.sleep(0.05)
+        return result
+
+    promises = [Promise.call(another, i) for i in range(10)]
+    promise  = (
+      Promise.collect(promises)
+      .within(0.25)
+      .handle(lambda err: "yay")
+    )
+
+    self.assertEqual("yay", promise.get())
+
+
+class PromiseAlternativeNamesTests(PromiseTests, unittest.TestCase):
 
   def test_andthen(self):
     self.assertEqual(
@@ -322,16 +373,16 @@ class PromiseAlternativeNamesTests(unittest.TestCase):
 
   def test_select_(self):
     self.assertEqual(
-      Promise.wait(0.15).flatmap(lambda v: Promise.exception(MiraiError()))
+      Promise.wait(0.50).flatmap(lambda v: Promise.exception(MiraiError()))
       .select_(
         Promise.wait(0.05).map(lambda v: 2),
-        Promise.wait(0.10).map(lambda v: 3),
-      ).get(0.2),
+        Promise.wait(0.90).map(lambda v: 3),
+      ).get(0.40),
       2,
     )
 
 
-class PromiseMergingTests(unittest.TestCase):
+class PromiseMergingTests(PromiseTests, unittest.TestCase):
 
   def test_collect_success(self):
     fut1 = [Promise.value(1), Promise.value(2), Promise.value(3)]
@@ -375,16 +426,32 @@ class PromiseMergingTests(unittest.TestCase):
   def test_or_(self):
     self.assertEqual(
       Promise.wait(0.05).map(lambda v: 1).or_(
-        Promise.wait(0.10).map(lambda v: 2),
-        Promise.wait(0.15).map(lambda v: 3),
-      ).get(0.2),
+        Promise.wait(0.25).map(lambda v: 2),
+        Promise.wait(0.50).map(lambda v: 3),
+      ).get(0.1),
       1,
     )
 
+  def test_select_few_threads(self):
+    # this ensures that Promise.select won't cause a threadlock if all workers
+    # are busy with the threads it's waiting on.
+    Promise.executor(ThreadPoolExecutor(max_workers=2))
 
-class FutureTests(unittest.TestCase):
+    promises = [
+      Promise.select([
+        Promise.wait(1.0).map(lambda v: v),
+        Promise.wait(0.1).map(lambda v: "yay"),
+      ])
+      .flatmap(lambda (winner, losers): winner)
+      for i in range(2)
+    ]
 
-  def test(self):
+    self.assertEqual(["yay"] * 2, Promise.collect(promises).get(2.5))
+
+
+class FutureTests(PromiseTests, unittest.TestCase):
+
+  def test_proxy(self):
     promise = Promise()
     future  = promise.future()
 
@@ -397,3 +464,12 @@ class FutureTests(unittest.TestCase):
     promise.setvalue(1)
 
     self.assertEqual(1, future.get(timeout=0.01))
+
+  def test_no_set(self):
+    future = Promise().future()
+    self.assertRaises(AttributeError, future.setvalue, 1)
+    self.assertRaises(AttributeError, future.setexception, Exception())
+
+
+if __name__ == '__main__':
+  unittest.main()
