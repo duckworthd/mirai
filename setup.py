@@ -10,16 +10,6 @@ def version(name):
   return env['__version__']
 
 
-def requirements():
-  import os
-  folder       = os.path.split(__file__)[0]
-  requirements = os.path.join(folder, "requirements.txt")
-  with open(requirements, 'r') as f:
-    lines = f.readlines()
-    lines = [l.strip().split("#")[0] for l in lines]
-  return lines
-
-
 if __name__ == '__main__':
   setup(
       name              = 'mirai',
@@ -37,7 +27,13 @@ if __name__ == '__main__':
         'Operating System :: OS Independent',
         'Programming Language :: Python',
       ],
-      install_requires  = requirements(),
+      setup_requires    = [
+        "setuptools>=3.4.4",
+      ],
+      install_requires  = [
+        "futures>=2.1.6",
+        "joblib>=0.7.1",
+      ],
       tests_require     = [
         "nose>=1.3.1",
       ]
