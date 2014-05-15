@@ -16,13 +16,13 @@ class PromiseTests(object):
 class PromiseConstructorTests(PromiseTests, unittest.TestCase):
 
   def test_value(self):
-    self.assertEqual(Promise.value(1).get(), 1)
+    self.assertEqual(Promise.value(1).get(0.5), 1)
 
   def test_exception(self):
     self.assertRaises(Exception, Promise.exception(Exception()).get)
 
   def test_wait(self):
-    self.assertIsNone(Promise.wait(0.05).get(), None)
+    self.assertIsNone(Promise.wait(0.05).get(0.5), None)
 
   def test_call(self):
 
@@ -30,14 +30,14 @@ class PromiseConstructorTests(PromiseTests, unittest.TestCase):
       return a+b
 
     # value matches
-    self.assertEqual(3, Promise.call(foo, 1, b=2).get(0.05))
+    self.assertEqual(3, Promise.call(foo, 1, b=2).get(0.5))
 
     # exceptions subclass appropriately
     def bar():
       raise NotImplementedError("Uh oh...")
 
-    self.assertRaises(NotImplementedError, Promise.call(bar).get, 0.1)
-    self.assertRaises(MiraiError, Promise.call(bar).get, 0.1)
+    self.assertRaises(NotImplementedError, Promise.call(bar).get, 0.5)
+    self.assertRaises(MiraiError, Promise.call(bar).get, 0.5)
 
 
 class PromiseBasicTests(PromiseTests, unittest.TestCase):
@@ -47,7 +47,7 @@ class PromiseBasicTests(PromiseTests, unittest.TestCase):
     fut1 = Promise()
     fut1.setvalue(o)
 
-    self.assertEqual(fut1.get(), o)
+    self.assertEqual(fut1.get(0.5), o)
 
   def test_setvalue_twice(self):
     fut1 = Promise()
@@ -82,7 +82,7 @@ class PromiseBasicTests(PromiseTests, unittest.TestCase):
   def test_get_success(self):
     fut = Promise.value(1)
 
-    self.assertEqual(fut.get(), 1)
+    self.assertEqual(fut.get(0.5), 1)
 
   def test_get_exception(self):
     class VerySpecificException(Exception): pass
@@ -126,7 +126,7 @@ class PromiseCallbackTests(PromiseTests, unittest.TestCase):
     fut1 = Promise()
     fut2 = Promise.value(1).onsuccess(lambda v: fut1.setvalue(v))
 
-    self.assertEqual(fut1.get(), 1)
+    self.assertEqual(fut1.get(0.5), 1)
 
   def test_onsuccess_failure(self):
     fut1 = Promise()
@@ -149,7 +149,7 @@ class PromiseCallbackTests(PromiseTests, unittest.TestCase):
     fut1 = Promise()
     fut2 = Promise.exception(e).onfailure(lambda e: fut1.setvalue(e))
 
-    self.assertEqual(fut1.get(), e)
+    self.assertEqual(fut1.get(0.5), e)
 
 
 class PromiseMapTests(PromiseTests, unittest.TestCase):
@@ -158,7 +158,7 @@ class PromiseMapTests(PromiseTests, unittest.TestCase):
     fut1 = Promise.value(1)
     fut2 = fut1.flatmap(lambda v: Promise.value(v+1))
 
-    self.assertEqual(fut2.get(), 2)
+    self.assertEqual(fut2.get(0.5), 2)
 
   def test_flatmap_exception(self):
     fut1 = Promise.exception(Exception())
@@ -170,7 +170,7 @@ class PromiseMapTests(PromiseTests, unittest.TestCase):
     fut1 = Promise.value(1)
     fut2 = fut1.map(lambda v: v+1)
 
-    self.assertEqual(fut2.get(), 2)
+    self.assertEqual(fut2.get(0.5), 2)
 
   def test_map_failure(self):
     fut1 = Promise.exception(Exception())
@@ -185,19 +185,19 @@ class PromiseMiscellaneousTests(PromiseTests, unittest.TestCase):
     fut1 = Promise.value("A")
     fut2 = fut1.rescue(lambda e: "B")
 
-    self.assertEqual(fut2.get(), "A")
+    self.assertEqual(fut2.get(0.5), "A")
 
   def test_rescue_failure(self):
     fut1 = Promise.exception(Exception("A"))
     fut2 = fut1.rescue(lambda e: Promise.value(e.message))
 
-    self.assertEqual(fut2.get(), "A")
+    self.assertEqual(fut2.get(0.5), "A")
 
   def test_within_success(self):
     fut1 = Promise.value("A")
     fut2 = fut1.within(0.5)
 
-    self.assertEqual(fut2.get(), "A")
+    self.assertEqual(fut2.get(0.5), "A")
 
   def test_within_failure(self):
     fut1 = Promise()
@@ -267,15 +267,15 @@ class PromiseMiscellaneousTests(PromiseTests, unittest.TestCase):
 
     Promise.executor(ThreadPoolExecutor(max_workers=20))
     promises = [
-      Promise.call(time.sleep, 0.25 if i < 5 else 0.75)
+      Promise.call(time.sleep, 0.05 if i < 5 else 0.75)
       for i in range(10)
     ]
     promise = (
       Promise.collect(promises)
-      .within(0.5)
+      .within(0.1)
       .handle(lambda err: "yay")
     )
-    self.assertEqual("yay", promise.get())
+    self.assertEqual("yay", promise.get(0.5))
 
   def test_within_few_threads(self):
     # ensure that code doesn't lock up if I create far more threads than I have
@@ -302,19 +302,19 @@ class PromiseMiscellaneousTests(PromiseTests, unittest.TestCase):
       .handle(lambda err: "yay")
     )
 
-    self.assertEqual("yay", promise.get())
+    self.assertEqual("yay", promise.get(0.5))
 
 
 class PromiseAlternativeNamesTests(PromiseTests, unittest.TestCase):
 
   def test_andthen(self):
     self.assertEqual(
-        Promise.value(2).flatmap(lambda v: Promise.value(5)).get(),
-        Promise.value(2).andthen(lambda v: Promise.value(5)).get(),
+        Promise.value(2).flatmap(lambda v: Promise.value(5)).get(0.5),
+        Promise.value(2).andthen(lambda v: Promise.value(5)).get(0.5),
     )
 
   def test_call(self):
-    self.assertEqual(Promise.value(1).get(), Promise.value(1)())
+    self.assertEqual(Promise.value(1).get(0.5), Promise.value(1)())
     self.assertRaises(TimeoutError, Promise().get, 0.05)
 
   def test_ensure(self):
@@ -388,7 +388,7 @@ class PromiseMergingTests(PromiseTests, unittest.TestCase):
     fut1 = [Promise.value(1), Promise.value(2), Promise.value(3)]
     fut2 = Promise.collect(fut1, timeout=0.01)
 
-    self.assertEqual(fut2.get(), [1,2,3])
+    self.assertEqual(fut2.get(0.5), [1,2,3])
 
   def test_collect_failure(self):
     fut1 = [Promise.exception(Exception()), Promise.value(2), Promise.value(3)]
@@ -401,7 +401,7 @@ class PromiseMergingTests(PromiseTests, unittest.TestCase):
     fut2 = Promise.join(fut1)
 
     for fut in fut1:
-      self.assertEqual(fut.get(), 0.1)
+      self.assertEqual(fut.get(0.5), 0.1)
 
   def test_join_failure(self):
     fut1 = [Promise.value(0), Promise().within(0.05)]
@@ -414,7 +414,7 @@ class PromiseMergingTests(PromiseTests, unittest.TestCase):
     resolved, rest = Promise.select(fut1).get(0.1)
 
     self.assertEqual(len(rest), 1)
-    self.assertEqual(resolved.get(), 0.05)
+    self.assertEqual(resolved.get(0.5), 0.05)
     self.assertFalse(rest[0].isdefined())
 
   def test_join_(self):
@@ -439,14 +439,15 @@ class PromiseMergingTests(PromiseTests, unittest.TestCase):
 
     promises = [
       Promise.select([
-        Promise.wait(1.0).map(lambda v: v),
+        Promise.wait(0.5).map(lambda v: v),
         Promise.wait(0.1).map(lambda v: "yay"),
       ])
       .flatmap(lambda (winner, losers): winner)
       for i in range(2)
     ]
 
-    self.assertEqual(["yay"] * 2, Promise.collect(promises).get(2.5))
+    # shouldn't throw a timeout error
+    Promise.collect(promises).get(2.5)
 
 
 class FutureTests(PromiseTests, unittest.TestCase):
