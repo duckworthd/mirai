@@ -2,5 +2,8 @@
 *.egg*
 
 dist
+build
 env
 tmp
+
+.DS_Store
