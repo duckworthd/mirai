@@ -27,7 +27,7 @@ sys.path.append(ROOT)
 from setup import version
 
 # use flask's theme
-sys.path.append(ROOT.joinpath("docs/source/_themes"))
+sys.path.append(os.path.join(ROOT, "docs/source/_themes"))
 
 # If extensions (or modules to document with autodoc) are in another directory,
 # add these directories to sys.path here. If the directory is relative to the
