@@ -16,11 +16,7 @@ import sys
 import os
 
 # define project root (for automatic API documentation)
-try:
-  from path import path
-  ROOT = path(__file__).abspath().dirname().parent.parent
-except ImportError:
-  ROOT = "../../"
+ROOT = os.path.abspath(os.path.split(__file__)[0] + "../../../")
 sys.path.append(ROOT)
 
 # derive version from setup.py

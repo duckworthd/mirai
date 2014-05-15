@@ -1,3 +1,2 @@
 setuptools>=3.4.4   # hack to ensure right version of setuptools is available...
 numpydoc
-path.py
