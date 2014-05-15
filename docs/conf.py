@@ -16,14 +16,14 @@ import sys
 import os
 
 # define project root (for automatic API documentation)
-ROOT = os.path.abspath(os.path.split(__file__)[0] + "../../../")
+ROOT = os.path.abspath(os.path.split(__file__)[0] + "../../")
 sys.path.append(ROOT)
 
 # derive version from setup.py
 from setup import version
 
 # use flask's theme
-sys.path.append(os.path.join(ROOT, "docs/source/_themes"))
+sys.path.append(os.path.join(ROOT, "docs/_themes"))
 
 # If extensions (or modules to document with autodoc) are in another directory,
 # add these directories to sys.path here. If the directory is relative to the
