@@ -4,7 +4,7 @@ ENVROOT = env
 all: develop
 
 clean:
-	rm -rf *.egg *.egg-info *.pyc build dist
+	rm -rf *.egg *.egg-info *.pyc build dist docs/_build
 	find mirai -iname '*.pyc' | xargs rm
 
 clean-env: clean
