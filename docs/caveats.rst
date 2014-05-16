@@ -84,12 +84,12 @@ have an upper bound on the number of active threads.
 Combining promises isn't free
 -----------------------------
 
-:mod:`mirai` provides several functions for combining promises together --
-namely, :meth:`Promise.collect`, :meth:`Promise.join`, and
-:meth:`Promise.select`.  Unlike all callbacks registered with `Promise.call`,
-these functions generate threads *outside of mirai's ThreadPoolExecutor*. This
-is because these functions ultimately wait upon the completion of other
-promises, which we already know can cause race conditions (see :ref:`waiting`).
+:mod:`mirai` provides several functions for combining promises -- namely,
+:meth:`Promise.collect`, :meth:`Promise.join`, and :meth:`Promise.select`.
+Unlike all callbacks registered with `Promise.call`, these functions generate
+threads *outside of mirai's ThreadPoolExecutor*. This is because these
+functions ultimately wait upon the completion of other promises, which we
+already know can cause race conditions (see :ref:`waiting`).
 
 These threads are not bound by any thread pool, thus each call creates a new
 thread. If too many such threads are alive at the same time `bad things can
@@ -101,3 +101,16 @@ first imported, you can generate as many threads as you want, as they will be
 implicitly converted to greenlets.
 
 .. _`bad things can happen`: http://www.jstorimer.com/blogs/workingwithcode/7970125-how-many-threads-is-too-many
+
+
+Zombie threads
+--------------
+
+Standard behavior on multithreaded applications is to allow every thread to
+exit cleanly unless killed explicitly. For :mod:`mirai`, this means that even
+though all the threads *you care about* may be finished, there may still be
+other threads running, and thus your process will not end, even if you use
+:func:`sys.exit`.
+
+If a thread is in an infinite loop for example, your code will never exit
+cleanly. There is no recourse for this at present.
