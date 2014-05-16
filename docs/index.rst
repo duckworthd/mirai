@@ -56,11 +56,12 @@ Documentation
 -------------
 
 .. toctree::
-   :maxdepth: 2
+  :maxdepth: 2
 
   why
   tutorial
   api
+  caveats
 
 
 .. _`Twitter Futures`: http://twitter.github.io/scala_school/finagle.html#Future
