@@ -51,8 +51,8 @@ active at once.
 .. _`too many threads`: http://www.jstorimer.com/blogs/workingwithcode/7970125-how-many-threads-is-too-many
 
 The one cardinal sin of :mod:`mirai` is waiting upon a promise with
-`Promise.get` within a currently-running promise. The reason is that the
-*waiting* thread has reserved one of `mirai`'s finite number of worker
+:meth:`Promise.get` within a currently-running promise. The reason is that the
+*waiting* thread has reserved one of :mod:`mirai`'s finite number of worker
 threads, and if all such worker threads are waiting upon *other* promises, then
 there will be no workers for *awaited upon* promises. In other words, all
 worker threads will wait forever. For example,
@@ -77,8 +77,8 @@ worker threads will wait forever. For example,
   # this will never return...
   Promise.collect(primaries).get()
 
-The workaround for this is to use :class:`mirai.GreenletPoolExecutor`, which doesn't
-have an upper bound on the number of active threads.
+The workaround for this is to use :class:`mirai.UnboundedThreadPoolExecutor`,
+which doesn't have an upper bound on the number of active threads.
 
 
 Combining promises isn't free
@@ -86,8 +86,8 @@ Combining promises isn't free
 
 :mod:`mirai` provides several functions for combining promises -- namely,
 :meth:`Promise.collect`, :meth:`Promise.join`, and :meth:`Promise.select`.
-Unlike all callbacks registered with `Promise.call`, these functions generate
-threads *outside of mirai's ThreadPoolExecutor*. This is because these
+Unlike all callbacks registered with :meth:`Promise.call`, these functions
+generate threads *outside of mirai's ThreadPoolExecutor*. This is because these
 functions ultimately wait upon the completion of other promises, which we
 already know can cause race conditions (see :ref:`waiting`).
 
@@ -113,4 +113,7 @@ other threads running, and thus your process will not end, even if you use
 :func:`sys.exit`.
 
 If a thread is in an infinite loop for example, your code will never exit
-cleanly. There is no recourse for this at present.
+cleanly. The recourse for this is to use
+:class:`mirai.UnboundedThreadPoolExecutor` as your executor with `max_workers`
+set to None. Unlike :class:`ThreadPoolExecutor`, this executor will not wait
+for threads to finish cleanly when the process exits.

@@ -24,7 +24,9 @@ class UnboundedThreadPoolExecutor(Executor):
   """
 
   def __init__(self, max_workers=None):
-    self._open = True
+    self._open       = True
+    self.max_workers = max_workers
+
     if max_workers is None:
       self._pool = None
     else:
@@ -32,6 +34,27 @@ class UnboundedThreadPoolExecutor(Executor):
       self._pool = ThreadPoolExecutor(max_workerss)
 
   def submit(self, fn, *args, **kwargs):
+    """Submit a new task to be executed asynchronously.
+
+    If `self.max_workers` is an integer, then the behavior of this function
+    will be identical to that of `concurrent.futures.ThreadPoolExecutor`.
+    However, if it is None, then a new daemonized thread will be constructed
+    and started.
+
+    Parameters
+    ----------
+    fn : function-like
+        function (or callable object) to execute asynchronously.
+    args : list
+        positional arguments to pass to `fn`.
+    kwargs: dict
+        keyword arguments to pass to `fn`.
+
+    Returns
+    -------
+    future : concurrent.futures.Future
+        Container for future result or exception
+    """
     if not hasattr(fn, '__call__'):
       raise ValueError("`fn` argument isn't callable!")
 
@@ -57,11 +80,20 @@ class UnboundedThreadPoolExecutor(Executor):
 
       # create/start a new thread not bound to any threadpool
       thread = Thread(target=populate)
+      thread.daemon = True
       thread.start()
 
       return future
 
   def shutdown(self, wait=True):
+    """Shutdown this thread pool, preventing future tasks from being enqueued.
+
+    Parameters
+    ----------
+    wait : bool
+        Wait for all running threads to finish. Only used if this pool was
+        initialized with a fixed number of workers.
+    """
     self._open = False
     if self._pool is not None:
       self._pool.shutdown(wait=wait)
