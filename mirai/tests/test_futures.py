@@ -4,16 +4,8 @@ import unittest
 from mirai import *
 
 
-class PromiseTests(object):
-
-  def setUp(self):
-    Promise.executor(ThreadPoolExecutor(max_workers=10))
-
-  def tearDown(self):
-    Promise.executor().shutdown(wait=False)
-
-
-class PromiseConstructorTests(PromiseTests, unittest.TestCase):
+class PromiseConstructorTests(object):
+  """Constructing new Promises without any dependencies."""
 
   def test_value(self):
     self.assertEqual(Promise.value(1).get(0.5), 1)
@@ -40,7 +32,8 @@ class PromiseConstructorTests(PromiseTests, unittest.TestCase):
     self.assertRaises(MiraiError, Promise.call(bar).get, 0.5)
 
 
-class PromiseBasicTests(PromiseTests, unittest.TestCase):
+class PromiseBasicTests(object):
+  """Core Promise functionality: setting/getting state"""
 
   def test_setvalue(self):
     o    = object()
@@ -120,7 +113,8 @@ class PromiseBasicTests(PromiseTests, unittest.TestCase):
     self.assertRaises(MiraiError, fut1.get, 0.1)
 
 
-class PromiseCallbackTests(PromiseTests, unittest.TestCase):
+class PromiseCallbackTests(object):
+  """Tests for settings callbacks"""
 
   def test_onsuccess_success(self):
     fut1 = Promise()
@@ -152,7 +146,8 @@ class PromiseCallbackTests(PromiseTests, unittest.TestCase):
     self.assertEqual(fut1.get(0.5), e)
 
 
-class PromiseMapTests(PromiseTests, unittest.TestCase):
+class PromiseMapTests(object):
+  """Tests for map/flatmap"""
 
   def test_flatmap_success(self):
     fut1 = Promise.value(1)
@@ -179,7 +174,8 @@ class PromiseMapTests(PromiseTests, unittest.TestCase):
     self.assertRaises(Exception, fut2.get)
 
 
-class PromiseMiscellaneousTests(PromiseTests, unittest.TestCase):
+class PromiseMiscellaneousTests(object):
+  """Other Promise methods..."""
 
   def test_rescue_success(self):
     fut1 = Promise.value("A")
@@ -261,6 +257,10 @@ class PromiseMiscellaneousTests(PromiseTests, unittest.TestCase):
     new = Promise.executor(ThreadPoolExecutor(max_workers=10))
     self.assertEqual(Promise.call(lambda v: v+1, 1).get(0.05), 2)
 
+
+class PromiseThreadcountTests(object):
+  """Tests involving a fixed number of threads"""
+
   def test_within_many_threads(self):
     # ensure's that within actually works, even when other threads are waiting.
     import time
@@ -304,8 +304,26 @@ class PromiseMiscellaneousTests(PromiseTests, unittest.TestCase):
 
     self.assertEqual("yay", promise.get(0.5))
 
+  def test_select_few_threads(self):
+    # this ensures that Promise.select won't cause a threadlock if all workers
+    # are busy with the threads it's waiting on.
+    Promise.executor(ThreadPoolExecutor(max_workers=2))
 
-class PromiseAlternativeNamesTests(PromiseTests, unittest.TestCase):
+    promises = [
+      Promise.select([
+        Promise.wait(0.5).map(lambda v: v),
+        Promise.wait(0.1).map(lambda v: "yay"),
+      ])
+      .flatmap(lambda (winner, losers): winner)
+      for i in range(2)
+    ]
+
+    # shouldn't throw a timeout error
+    Promise.collect(promises).get(2.5)
+
+
+class PromiseAlternativeNamesTests(object):
+  """Promise methods that are just alternative names for other methods"""
 
   def test_andthen(self):
     self.assertEqual(
@@ -382,7 +400,8 @@ class PromiseAlternativeNamesTests(PromiseTests, unittest.TestCase):
     )
 
 
-class PromiseMergingTests(PromiseTests, unittest.TestCase):
+class PromiseMergingTests(object):
+  """Methods for combining Promises together"""
 
   def test_collect_success(self):
     fut1 = [Promise.value(1), Promise.value(2), Promise.value(3)]
@@ -432,25 +451,14 @@ class PromiseMergingTests(PromiseTests, unittest.TestCase):
       1,
     )
 
-  def test_select_few_threads(self):
-    # this ensures that Promise.select won't cause a threadlock if all workers
-    # are busy with the threads it's waiting on.
-    Promise.executor(ThreadPoolExecutor(max_workers=2))
 
-    promises = [
-      Promise.select([
-        Promise.wait(0.5).map(lambda v: v),
-        Promise.wait(0.1).map(lambda v: "yay"),
-      ])
-      .flatmap(lambda (winner, losers): winner)
-      for i in range(2)
-    ]
+class FutureTests(
+    unittest.TestCase
+  ):
+  """Tests for read-only Futures"""
 
-    # shouldn't throw a timeout error
-    Promise.collect(promises).get(2.5)
-
-
-class FutureTests(PromiseTests, unittest.TestCase):
+  def setUp(self):
+    Promise.executor(ThreadPoolExecutor(max_workers=10))
 
   def test_proxy(self):
     promise = Promise()
@@ -470,6 +478,23 @@ class FutureTests(PromiseTests, unittest.TestCase):
     future = Promise().future()
     self.assertRaises(AttributeError, future.setvalue, 1)
     self.assertRaises(AttributeError, future.setexception, Exception())
+
+
+class PromiseTests(
+    PromiseConstructorTests,
+    PromiseBasicTests,
+    PromiseCallbackTests,
+    PromiseMapTests,
+    PromiseMiscellaneousTests,
+    PromiseThreadcountTests,
+    PromiseAlternativeNamesTests,
+    PromiseMergingTests,
+
+    unittest.TestCase,
+  ):
+
+  def setUp(self):
+    Promise.executor(ThreadPoolExecutor(max_workers=10))
 
 
 if __name__ == '__main__':
