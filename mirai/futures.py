@@ -55,6 +55,11 @@ class Promise(object):
 
       # return read-only version of promise
       return promise.future()
+
+  Parameters
+  ----------
+  future : concurrent.futures.Future
+      Future this promise wraps.
   """
 
   EXECUTOR = futures.ThreadPoolExecutor(max_workers=10)
@@ -943,7 +948,7 @@ class Promise(object):
     return cls(cls.EXECUTOR.submit(SafeFunction(fn), *args, **kwargs)).future()
 
   @classmethod
-  def executor(cls, executor=None):
+  def executor(cls, executor=None, wait=True):
     """
     Set/Get the EXECUTOR Promise uses. If setting, the current executor is
     first shut down.
@@ -953,6 +958,9 @@ class Promise(object):
     executor : concurrent.futures.Executor or None
         If None, retrieve the current executor, otherwise, shutdown the current
         Executor object and replace it with this argument.
+    wait : bool, optional
+        Whether or not to block this thread until all workers are shut down
+        cleanly.
 
     Returns
     -------
@@ -963,7 +971,7 @@ class Promise(object):
       return cls.EXECUTOR
     else:
       if cls.EXECUTOR is not None:
-        cls.EXECUTOR.shutdown()
+        cls.EXECUTOR.shutdown(wait=wait)
       cls.EXECUTOR = executor
       return cls.EXECUTOR
 
