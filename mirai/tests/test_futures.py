@@ -4,6 +4,10 @@ import unittest
 from mirai import *
 
 
+class ExampleException(Exception):
+  pass
+
+
 class PromiseConstructorTests(object):
   """Constructing new Promises without any dependencies."""
 
@@ -161,6 +165,27 @@ class PromiseMapTests(object):
 
     self.assertRaises(Exception, fut2.get)
 
+  def test_flatmap_raises(self):
+    def uhoh(v):
+      raise ExampleException(v)
+
+    fut1 = Promise.value(1)
+    fut2 = fut1.flatmap(uhoh)
+
+    self.assertRaises(ExampleException, fut2.get, 0.1)
+
+  def test_flatmap_badfunc(self):
+    fut1 = Promise.value(1)
+    fut2 = fut1.flatmap(lambda: 1)
+
+    self.assertRaises(Exception, fut2.get, 0.1)
+
+  def test_flatmap_nonpromise_return_value(self):
+    fut1 = Promise.value(1)
+    fut2 = fut1.flatmap(lambda v: 1)
+
+    self.assertRaises(MiraiError, fut2.get, 0.1)
+
   def test_map_success(self):
     fut1 = Promise.value(1)
     fut2 = fut1.map(lambda v: v+1)
@@ -171,7 +196,21 @@ class PromiseMapTests(object):
     fut1 = Promise.exception(Exception())
     fut2 = fut1.map(lambda v: v+1)
 
-    self.assertRaises(Exception, fut2.get)
+    self.assertRaises(Exception, fut2.get, 0.1)
+
+  def test_map_raises(self):
+    def uhoh(v):
+      raise Exception(v)
+
+    fut1 = Promise.value(1)
+    fut2 = fut1.map(uhoh)
+
+    self.assertRaises(Exception, fut2.get, 0.1)
+
+  def test_map_badfunc(self):
+    fut1 = Promise.value(1)
+    fut2 = fut1.map(lambda: 1)
+    self.assertRaises(Exception, fut2.get, 0.1)
 
 
 class PromiseMiscellaneousTests(object):
@@ -188,6 +227,27 @@ class PromiseMiscellaneousTests(object):
     fut2 = fut1.rescue(lambda e: Promise.value(e.message))
 
     self.assertEqual(fut2.get(0.5), "A")
+
+  def test_rescue_nonpromise_return_value(self):
+    fut1 = Promise.exception(Exception("A"))
+    fut2 = fut1.rescue(lambda e: "uh oh")
+
+    self.assertRaises(MiraiError, fut2.get, 0.5)
+
+  def test_rescue_raises(self):
+    def reraise(e):
+      raise e
+
+    fut1 = Promise.exception(Exception("A"))
+    fut2 = fut1.rescue(reraise)
+
+    self.assertRaises(Exception, fut2.get, 0.5)
+
+  def test_rescue_badfunc(self):
+    fut1 = Promise.exception(Exception("A"))
+    fut2 = fut1.rescue(lambda: 1)
+
+    self.assertRaises(Exception, fut2.get, 0.5)
 
   def test_within_success(self):
     fut1 = Promise.value("A")
@@ -219,6 +279,7 @@ class PromiseMiscellaneousTests(object):
   def test_update(self):
     self.assertEqual(Promise().update(Promise.value(1)).get(0.01), 1)
     self.assertRaises(Exception, Promise().update(Promise.exception(Exception())).get, 0.01)
+    self.assertRaises(MiraiError, Promise().update, 1)
 
   def test_updateifempty(self):
     # nothing/value
@@ -251,6 +312,8 @@ class PromiseMiscellaneousTests(object):
       .get,
       0.05
     )
+
+    self.assertRaises(MiraiError, Promise().updateifempty, 1)
 
   def test_executor(self):
     old = Promise.executor()

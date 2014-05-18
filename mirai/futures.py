@@ -160,7 +160,9 @@ class Promise(object):
       ]))
       .flatmap(lambda (v, b):
         Promise.value(v) if b
-        else Promise.exception(MiraiError("Value {} was filtered out".format(v)))
+        else Promise.exception(
+          MiraiError(u"Value {} was filtered out".format(v))
+        )
       )
     )
 
@@ -186,6 +188,12 @@ class Promise(object):
     def populate(v):
       def setvalue(fut):
         try:
+          if not isinstance(fut, Promise):
+            raise MiraiError(
+              "Return value of `Promise.flatmap`'s argument isn't a Promise. If "
+              "you mean to transform the value contained within, use `Promise.map` "
+              "instead."
+            )
           fut.proxyto(result)
         except Exception as e:
           result.setexception(e)
@@ -216,9 +224,9 @@ class Promise(object):
 
     Returns
     -------
-    None
+    self : Promise
     """
-    self.onsuccess(fn)
+    return self.onsuccess(fn)
 
   def future(self):
     """
@@ -256,7 +264,7 @@ class Promise(object):
     """
     return self._future.result(timeout)
 
-  def getorelse(self, default):
+  def getorelse(self, default, timeout=None):
     """
     Like `Promise.get`, but instead of raising an exception when this Promise
     fails, returns a default value.
@@ -264,10 +272,20 @@ class Promise(object):
     Parameters
     ----------
     default : anything
-        default value to return in case of time
+        default value to return in case of timeout or exception.
+    timeout : None or float
+        time to wait before returning default value if this promise is unresolved.
+
+    Returns
+    -------
+    result : anything
+        value this Promise resolves to, if it resolves successfully, else
+        `default`.
     """
     try:
-      return self.get(timeout=0)
+      if timeout is None:
+        timeout = 0
+      return self.get(timeout=timeout)
     except Exception as e:
       return default
 
@@ -479,6 +497,11 @@ class Promise(object):
     -------
     self : Promise
     """
+    if not isinstance(other, Promise):
+      raise MiraiError(
+        "Attempting to proxy this Promise onto a non-Promise object. You can "
+        "only copy the state of one Promise to another. "
+      )
     self.onsuccess(other.setvalue).onfailure(other.setexception)
     return self
 
@@ -504,6 +527,12 @@ class Promise(object):
     def rescue(e):
       def setvalue(fut):
         try:
+          if not isinstance(fut, Promise):
+            raise MiraiError(
+              "Return value of `Promise.rescue`'s argument isn't a Promise. If "
+              "you mean to transform the exception directly, use "
+              "`Promise.handle` instead."
+            )
           fut.proxyto(result)
         except Exception as e:
           result.setexception(e)
@@ -528,7 +557,7 @@ class Promise(object):
 
     Parameters
     ----------
-    fn : (future,) -> None
+    fn : (Promise,) -> None
         Function to apply to this Promise upon completion. Return value is ignored
 
     Returns
@@ -638,6 +667,12 @@ class Promise(object):
     -------
     self : Promise
     """
+    if not isinstance(other, Promise):
+      raise MiraiError(
+        "`Promise.update`'s argument isn't a Promise. You can't copy the state "
+        "of this Promise onto a non-Promise object."
+      )
+
     other.proxyto(self)
     return self
 
@@ -654,6 +689,12 @@ class Promise(object):
     -------
     self : Promise
     """
+    if not isinstance(other, Promise):
+      raise MiraiError(
+        "`Promise.updateifempty`'s argument isn't a Promise. You can't copy the "
+        "state of this Promise onto a non-Promise object."
+      )
+
     def setvalue(v):
       try:
         self.setvalue(v)
