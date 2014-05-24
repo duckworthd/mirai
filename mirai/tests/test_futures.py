@@ -386,7 +386,7 @@ class PromiseMergingTests(PromiseTests, unittest.TestCase):
 
   def test_collect_success(self):
     fut1 = [Promise.value(1), Promise.value(2), Promise.value(3)]
-    fut2 = Promise.collect(fut1, timeout=0.01)
+    fut2 = Promise.collect(fut1).within(0.01)
 
     self.assertEqual(fut2.get(0.5), [1,2,3])
 

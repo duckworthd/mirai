@@ -793,7 +793,7 @@ class Promise(object):
     return result.future()
 
   @classmethod
-  def collect(cls, fs, timeout=None):
+  def collect(cls, fs):
     """
     Convert a sequence of Promises into a Promise containing a sequence of
     values, one per Promise in `fs`. The resulting Promise resolves once all
@@ -804,118 +804,79 @@ class Promise(object):
     ----------
     fs : [Promise]
         List of Promises to merge.
-    timeout : number or None
-        Number of seconds to wait before registering a `TimeoutError` with the
-        resulting Promise. If `None`, wait indefinitely.
 
     Returns
     -------
     result : Future
         Future containing values of all Futures in `fs`. If any Future in `fs`
-        fails, `result` fails with the same exception. If `timeout` seconds
-        pass before all Futures in `fs` resolve, `result` fails with a
-        `TimeoutError`.
+        fails, `result` fails with the same exception.
     """
-
-    def collect((complete, incomplete)):
-      try:
-        failed = [c for c in complete if cls(c).isfailure()]
-        if len(failed) > 0:
-          # one or more futures failed
-          return cls(failed[0])
-
-        elif len(incomplete) > 0:
-          # not all futures finished
-          m, n = len(complete), len(incomplete)
-          return cls.exception(
-            TimeoutError(
-              "{} of {} futures failed to complete in {} seconds."
-              .format(n, n+m, timeout)
-            )
-          )
-
-        else:
-          # all futures succeeded
-          return cls.value([f.get(timeout=0) for f in fs])
-      except Exception as e:
-        return cls.exception(e)
-
-    return (
-      cls
-      ._wait(fs, timeout=timeout)
-      .flatmap(collect)
-    )
+    lock  = threading.RLock()
+    xs    = [None] * len(fs)
+    count = [len(fs)] # If we don't box this number in a list, then our threaded accesses below will mysteriously hang [wat]
+    p     = Promise()
+    for i in range(len(fs)):
+      def body(i): # Capture i for closures
+        def onfailure(e):
+          p.updateifempty(Promise.exception(e))
+        def onsuccess(x):
+          with lock:
+            xs[i] = x
+            count[0] -= 1
+            if count[0] == 0:
+              p.updateifempty(Promise.value(xs))
+        fs[i].onsuccess(onsuccess).onfailure(onfailure)
+      body(i)
+    return p
 
   @classmethod
-  def join(cls, fs, timeout=None):
+  def join(cls, fs):
     """
     Construct a Promise that resolves when all Promises in `fs` have resolved. If
     any Promise in `fs` fails, the error is propagated into the resulting
-    Promise. If `timeout` seconds pass before all Promises have resolved, the
-    resulting Promise fails with a `TimeoutError`.
+    Promise.
 
     Parameters
     ----------
     fs : [Promise]
         List of Promises to merge.
-    timeout : number or None
-        Number of seconds to wait before registering a `TimeoutError` with the
-        resulting Promise. If `None`, wait indefinitely.
 
     Returns
     -------
     result : Future
-        Future containing None if all Futures in `fs` succeed, the exception of
-        the first failing Future in `fs`, or a `TimeoutError` if `timeout`
-        seconds pass before all Futures in `fs` resolve.
+        Future containing None if all Futures in `fs` succeed, or the exception
+        of the first failing Future in `fs`.
     """
-    return cls.collect(fs, timeout=timeout).map(lambda v: None)
+    return cls.collect(fs).map(lambda v: None)
 
   @classmethod
-  def select(cls, fs, timeout=None):
+  def select(cls, fs):
     """
     Return a Promise containing a tuple of 2 elements. The first is the first
     Promise in `fs` to resolve; the second is all remaining Promises that may or
-    may not be resolved yet. If `timeout` seconds pass before any Promise
-    resolves, the resulting Promise fails with a `TimeoutError`. The resolved
-    Promise is not guaranteed to have completed successfully.
+    may not be resolved yet. The resolved Promise is not guaranteed to have
+    completed successfully.
 
     Parameters
     ----------
     fs : [Promise]
         List of Promises to merge.
-    timeout : number or None
-        Number of seconds to wait before registering a `TimeoutError` with the
-        resulting Promise. If `None`, wait indefinitely.
 
     Returns
     -------
     result : Future
         Future containing the first Future in `fs` to finish and all remaining
-        (potentially) unresolved Futures as a tuple of 2 elements for its value
-        or a `TimeoutError` for its exception.
+        (potentially) unresolved Futures as a tuple of 2 elements for its value.
     """
-
-    def select((complete, incomplete)):
-      try:
-        if len(complete) > 0:
-          complete, incomplete = complete[0], incomplete + complete[1:]
-          return cls.value( (cls(complete), map(cls, incomplete)) )
-        else:
-          return cls.exception(
-            TimeoutError(
-              "No future finished in Promise.select in {} seconds"
-              .format(timeout)
-            )
-          )
-      except Exception as e:
-        return cls.exception(e)
-
-    return (
-      cls
-      ._wait(fs, timeout=timeout, return_when=futures.FIRST_COMPLETED)
-      .flatmap(select)
-    )
+    p = Promise()
+    if len(fs) == 0:
+      raise ValueError('Promise.select requires at least one future')
+    else:
+      for f in fs:
+        def body(f): # Capture f for closures below
+          f.respond(lambda x: p.updateifempty(Promise.value((f, filter(lambda g: g != f, fs)))))
+        body(f)
+    return p
 
   @classmethod
   def call(cls, fn, *args, **kwargs):
