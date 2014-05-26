@@ -244,12 +244,12 @@ class PromiseMiscellaneousTests(PromiseTests, unittest.TestCase):
     self.assertEqual(Promise().updateifempty(Promise.value(1)).get(0.01), 1)
 
     # value/value
-    self.assertEqual(Promise.value(2).updateifempty(Promise.value(1)).get(0.01), 2)
+    self.assertEqual(Promise().setvalue(2).updateifempty(Promise.value(1)).get(0.01), 2)
 
     # exception/nothing
     self.assertRaises(MiraiError,
-      Promise
-      .exception(MiraiError())
+      Promise()
+      .setexception(MiraiError())
       .updateifempty(Promise())
       .get,
       0.05
@@ -265,7 +265,8 @@ class PromiseMiscellaneousTests(PromiseTests, unittest.TestCase):
 
     # exception/value
     self.assertRaises(MiraiError,
-      Promise.exception(MiraiError())
+      Promise()
+      .setexception(MiraiError())
       .updateifempty(Promise.value(1))
       .get,
       0.05
