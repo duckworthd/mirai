@@ -512,6 +512,33 @@ class Promise(object):
 
     return result.future()
 
+  def transform(self, fn):
+    """
+    Apply a function with a single argument: this Promise after resolving.
+    The function must return another future.
+
+    Parameters
+    ----------
+    fn : (future,) -> Promise
+        Function to apply. Takes 1 positional argument. Must return a Promise.
+
+    Returns
+    -------
+    result : Future
+        Future containing return result of `fn`.
+    """
+    p = Promise()
+    def respond(fut):
+      assert fut.isdefined()
+      try:
+        q = fn(fut)
+      except Exception as e:
+        p.setexception(e)
+      else:
+        p.update(q)
+    self.respond(respond)
+    return p
+
   def respond(self, fn):
     """
     Apply a function to this Promise when it's resolved.
