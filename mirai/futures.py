@@ -397,27 +397,7 @@ class Promise(object):
     result : Future
         First future that is resolved, successfully or otherwise.
     """
-    result = Promise()
-
-    def or_():
-      def setresult(v):
-        try:
-          v[0].proxyto(result)
-        except Exception as e:
-          result.setexception(e)
-
-      try:
-        (
-          Promise
-          .select([self] + list(others))
-          .onsuccess(setresult)
-          .onfailure(result.setexception)
-        )
-      except Exception as e:
-        result.setexception(e)
-
-    Promise.call(or_)
-    return result.future()
+    return Promise.select((self,) + others).flatmap(lambda (fut, futs): fut)
 
   def proxyto(self, other):
     """
