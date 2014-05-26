@@ -122,13 +122,7 @@ class Promise(object):
     -------
     self : Future
     """
-    def ensure(v):
-      try:
-        Promise.call(fn)
-      except Exception as e:
-        pass
-
-    return self.onsuccess(ensure).onfailure(ensure)
+    return self.respond(lambda fut: fn())
 
   def filter(self, fn):
     """
