@@ -474,8 +474,7 @@ class Promise(object):
     -------
     self : Promise
     """
-    self.onsuccess(other.setvalue).onfailure(other.setexception)
-    return self
+    return self.onsuccess(other.setvalue).onfailure(other.setexception)
 
   def rescue(self, fn):
     """
