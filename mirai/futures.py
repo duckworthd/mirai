@@ -160,9 +160,7 @@ class Promise(object):
       ]))
       .flatmap(lambda (v, b):
         Promise.value(v) if b
-        else Promise.exception(
-          MiraiError(u"Value {} was filtered out".format(v))
-        )
+        else Promise.exception(MiraiError("Value {} was filtered out".format(v)))
       )
     )
 
@@ -557,7 +555,7 @@ class Promise(object):
 
     Parameters
     ----------
-    fn : (Promise,) -> None
+    fn : (future,) -> None
         Function to apply to this Promise upon completion. Return value is ignored
 
     Returns
