@@ -1,7 +1,9 @@
 from concurrent import futures
 from concurrent.futures import TimeoutError
+import sys
 import threading
 import time
+import traceback
 
 from .exceptions import MiraiError, SafeFunction, AlreadyResolvedError
 from .utils import proxyto
@@ -481,10 +483,14 @@ class Promise(object):
     -------
     self : Promise
     """
-    def respond(fut):
-      Promise.call(fn, Promise(fut))
-
-    self._future.add_done_callback(respond)
+    def done_callback(fut):
+      try:
+        fn(self)
+      except Exception as e:
+        traceback.print_stack()
+        print 'FATAL Uncaught exception in Promise.respond:', e # TODO log.error
+        sys.exit(1)                                             # TODO Better to exit or not?
+    self._future.add_done_callback(done_callback)
     return self
 
   def select_(self, *others):
