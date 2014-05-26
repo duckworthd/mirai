@@ -601,14 +601,12 @@ class Promise(object):
     -------
     self : Promise
     """
-    self._lock.acquire()
-    if self.isdefined():
-      self._lock.release()
-      raise AlreadyResolvedError("Promise is already resolved; you cannot set its status again.")
-    else:
-      self._future.set_exception(e)
-      self._lock.release()
-      return self
+    with self._lock:
+      if self.isdefined():
+        raise AlreadyResolvedError("Promise is already resolved; you cannot set its status again.")
+      else:
+        self._future.set_exception(e)
+        return self
 
   def setvalue(self, val):
     """
@@ -624,14 +622,12 @@ class Promise(object):
     -------
     self : Promise
     """
-    self._lock.acquire()
-    if self.isdefined():
-      self._lock.release()
-      raise AlreadyResolvedError("Promise is already resolved; you cannot set its status again.")
-    else:
-      self._future.set_result(val)
-      self._lock.release()
-      return self
+    with self._lock:
+      if self.isdefined():
+        raise AlreadyResolvedError("Promise is already resolved; you cannot set its status again.")
+      else:
+        self._future.set_result(val)
+        return self
 
   def unit(self):
     """
