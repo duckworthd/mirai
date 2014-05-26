@@ -338,18 +338,7 @@ class Promise(object):
         Future containing `fn` applied to this Promise's value. If this Promise
         fails, the exception is propagated.
     """
-    result = Promise()
-
-    def map(v):
-      try:
-        Promise.call(fn, v).proxyto(result)
-      except Exception as e:
-        result.setexception(e)
-
-    self.onsuccess(map)
-    self.onfailure(result.setexception)
-
-    return result.future()
+    return self.flatmap(lambda v: Promise.value(fn(v)))
 
   def onfailure(self, fn):
     """
