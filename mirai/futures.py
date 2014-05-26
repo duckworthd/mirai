@@ -211,9 +211,9 @@ class Promise(object):
 
     Returns
     -------
-    None
+    self : Promise
     """
-    self.onsuccess(fn)
+    return self.onsuccess(fn)
 
   def future(self):
     """
