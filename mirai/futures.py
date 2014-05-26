@@ -436,14 +436,15 @@ class Promise(object):
     -------
     self : Promise
     """
-    def onsuccess(fut):
+    def respond(fut):
+      assert fut.isdefined()
       try:
-        Promise.call(fn, fut.result())
+        v = fut.get()
       except Exception as e:
         pass
-
-    self._future.add_done_callback(onsuccess)
-    return self
+      else:
+        fn(v)
+    return self.respond(respond)
 
   def or_(self, *others):
     """
