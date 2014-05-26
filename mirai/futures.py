@@ -412,14 +412,15 @@ class Promise(object):
     -------
     self : Promise
     """
-    def onfailure(fut):
+    def respond(fut):
+      assert fut.isdefined()
       try:
-        fut.result()
+        v = fut.get()
       except Exception as e:
-        Promise.call(fn, e)
-
-    self._future.add_done_callback(onfailure)
-    return self
+        fn(e)
+      else:
+        pass
+    return self.respond(respond)
 
   def onsuccess(self, fn):
     """
