@@ -174,35 +174,10 @@ class Promise(object):
     result : Future
         Future containing return result of `fn`.
     """
-
-    result = Promise()
-
-    def populate(v):
-      def setvalue(fut):
-        try:
-          if not isinstance(fut, Promise):
-            raise MiraiError(
-              "Return value of `Promise.flatmap`'s argument isn't a Promise. If "
-              "you mean to transform the value contained within, use `Promise.map` "
-              "instead."
-            )
-          fut.proxyto(result)
-        except Exception as e:
-          result.setexception(e)
-
-      try:
-        (
-          Promise.call(fn, v)
-          .onsuccess(setvalue)
-          .onfailure(result.setexception)
-        )
-      except Exception as e:
-        result.setexception(e)
-
-    self.onsuccess(populate)
-    self.onfailure(result.setexception)
-
-    return result.future()
+    def transform(fut):
+      assert fut.isdefined()
+      return fn(fut.get())
+    return self.transform(transform)
 
   def foreach(self, fn):
     """
