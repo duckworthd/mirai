@@ -146,16 +146,8 @@ class Promise(object):
         Future whose contents are the contents of this Promise if `fn` evaluates
         truth on this Promise's contents.
     """
-    return (
-      self
-      .flatmap(lambda v: Promise.collect([
-        Promise.value(v),
-        Promise.call(fn, v),
-      ]))
-      .flatmap(lambda (v, b):
-        Promise.value(v) if b
-        else Promise.exception(MiraiError("Value {} was filtered out".format(v)))
-      )
+    return self.flatmap(lambda v:
+      Promise.value(v) if fn(v) else Promise.exception(MiraiError("Value {} was filtered out".format(v)))
     )
 
   def flatmap(self, fn):
