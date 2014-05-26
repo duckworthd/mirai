@@ -384,6 +384,9 @@ class PromiseAlternativeNamesTests(PromiseTests, unittest.TestCase):
 
 class PromiseMergingTests(PromiseTests, unittest.TestCase):
 
+  def test_collect_empty(self):
+    self.assertEqual(Promise.collect([]).get(0.1), [])
+
   def test_collect_success(self):
     fut1 = [Promise.value(1), Promise.value(2), Promise.value(3)]
     fut2 = Promise.collect(fut1).within(0.01)

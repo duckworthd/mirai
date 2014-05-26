@@ -811,23 +811,26 @@ class Promise(object):
         Future containing values of all Futures in `fs`. If any Future in `fs`
         fails, `result` fails with the same exception.
     """
-    lock  = threading.RLock()
-    xs    = [None] * len(fs)
-    count = [len(fs)] # If we don't box this number in a list, then our threaded accesses below will mysteriously hang [wat]
-    p     = Promise()
-    for i in range(len(fs)):
-      def body(i): # Capture i for closures
-        def onfailure(e):
-          p.updateifempty(Promise.exception(e))
-        def onsuccess(x):
-          with lock:
-            xs[i] = x
-            count[0] -= 1
-            if count[0] == 0:
-              p.updateifempty(Promise.value(xs))
-        fs[i].onsuccess(onsuccess).onfailure(onfailure)
-      body(i)
-    return p
+    if len(fs) == 0:
+      return Promise.value([]) # Promise below will never fulfill if there are no fs
+    else:
+      lock  = threading.RLock()
+      xs    = [None] * len(fs)
+      count = [len(fs)] # If we don't box this number in a list, then our threaded accesses below will mysteriously hang [wat]
+      p     = Promise()
+      for i in range(len(fs)):
+        def body(i): # Capture i for closures
+          def onfailure(e):
+            p.updateifempty(Promise.exception(e))
+          def onsuccess(x):
+            with lock:
+              xs[i] = x
+              count[0] -= 1
+              if count[0] == 0:
+                p.updateifempty(Promise.value(xs))
+          fs[i].onsuccess(onsuccess).onfailure(onfailure)
+        body(i)
+      return p
 
   @classmethod
   def join(cls, fs):
