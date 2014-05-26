@@ -491,34 +491,15 @@ class Promise(object):
         contains. If this Promise is successful, its value is propagated onto
         `result`.
     """
-    result = Promise()
-
-    def rescue(e):
-      def setvalue(fut):
-        try:
-          if not isinstance(fut, Promise):
-            raise MiraiError(
-              "Return value of `Promise.rescue`'s argument isn't a Promise. If "
-              "you mean to transform the exception directly, use "
-              "`Promise.handle` instead."
-            )
-          fut.proxyto(result)
-        except Exception as e:
-          result.setexception(e)
-
+    def transform(fut):
+      assert fut.isdefined()
       try:
-        (
-          Promise.call(fn, e)
-          .onsuccess(setvalue)
-          .onfailure(result.setexception)
-        )
+        v = fut.get()
       except Exception as e:
-        result.setexception(e)
-
-    self.onsuccess(result.setvalue)
-    self.onfailure(rescue)
-
-    return result.future()
+        return fn(e)
+      else:
+        return Promise.value(v)
+    return self.transform(transform)
 
   def transform(self, fn):
     """
