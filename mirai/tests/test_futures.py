@@ -24,6 +24,21 @@ class PromiseConstructorTests(PromiseTests, unittest.TestCase):
   def test_wait(self):
     self.assertIsNone(Promise.wait(0.05).get(0.5), None)
 
+  def test_eval(self):
+
+    def foo(a, b):
+      return a+b
+
+    # value matches
+    self.assertEqual(3, Promise.eval(foo, 1, b=2).get(0))
+
+    # exceptions subclass appropriately
+    def bar():
+      raise NotImplementedError("Uh oh...")
+
+    self.assertRaises(NotImplementedError, Promise.eval(bar).get, 0)
+    self.assertRaises(MiraiError, Promise.eval(bar).get, 0)
+
   def test_call(self):
 
     def foo(a, b):
