@@ -259,7 +259,7 @@ class Promise(object):
         setting the return value to `result`'s value. If this Promise is
         already successful, its value is propagated onto `result`.
     """
-    return self.rescue(lambda v: Promise.call(fn, v))
+    return self.rescue(lambda e: Promise.value(fn(e)))
 
   def isdefined(self):
     """
