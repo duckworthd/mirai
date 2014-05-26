@@ -639,16 +639,7 @@ class Promise(object):
         Promise with a value of `None` if this Promise succeeds. If this Promise
         fails, the exception is propagated.
     """
-    result = Promise()
-    try:
-      (
-        self
-        .onsuccess(lambda v: result.setvalue(None))
-        .onfailure(result.setexception)
-      )
-    except Exception as e:
-      result.setexception(e)
-    return result.future()
+    return self.map(lambda v: None)
 
   def update(self, other):
     """
