@@ -466,9 +466,12 @@ class PromiseAlternativeNamesTests(object):
 class PromiseMergingTests(object):
   """Methods for combining Promises together"""
 
+  def test_collect_empty(self):
+    self.assertEqual(Promise.collect([]).get(0.1), [])
+
   def test_collect_success(self):
     fut1 = [Promise.value(1), Promise.value(2), Promise.value(3)]
-    fut2 = Promise.collect(fut1, timeout=0.01)
+    fut2 = Promise.collect(fut1).within(0.01)
 
     self.assertEqual(fut2.get(0.5), [1,2,3])
 
