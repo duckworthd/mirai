@@ -164,7 +164,7 @@ class Promise(object):
         Future containing return result of `fn`.
     """
     def transform(fut):
-      assert fut.isdefined()
+      assert fut.isdefined(), '.get() should not block'
       return fn(fut.get())
     return self.transform(transform)
 
@@ -350,7 +350,7 @@ class Promise(object):
     self : Promise
     """
     def respond(fut):
-      assert fut.isdefined()
+      assert fut.isdefined(), '.get() should not block'
       try:
         v = fut.get()
       except Exception as e:
@@ -375,7 +375,7 @@ class Promise(object):
     self : Promise
     """
     def respond(fut):
-      assert fut.isdefined()
+      assert fut.isdefined(), '.get() should not block'
       try:
         v = fut.get()
       except Exception as e:
@@ -434,7 +434,7 @@ class Promise(object):
         `result`.
     """
     def transform(fut):
-      assert fut.isdefined()
+      assert fut.isdefined(), '.get() should not block'
       try:
         v = fut.get()
       except Exception as e:
@@ -460,7 +460,7 @@ class Promise(object):
     """
     p = Promise()
     def respond(fut):
-      assert fut.isdefined()
+      assert fut.isdefined(), '.get() should not block'
       try:
         q = fn(fut)
       except Exception as e:
