@@ -958,37 +958,6 @@ class Promise(object):
       return cls.value(v).future()
 
   @classmethod
-  def eval(cls, fn, *args, **kwargs):
-    """
-    Call a function (synchronously) and return a Promise with its result. If an
-    exception is thrown inside `fn`, a new exception type will be constructed
-    inheriting both from `MiraiError` and the exception's original type. The
-    new exception is the same the original, except that it also contains a
-    `context` attribute detailing the stack at the time the exception was
-    thrown.
-
-    Parameters
-    ----------
-    fn : function
-        Function to be called
-    *args : arguments
-    **kwargs : keyword arguments
-
-    Returns
-    -------
-    result : Future
-        Future containing the result of `fn(*args, **kwargs)` as its value or
-        the exception thrown as its exception.
-    """
-    fn = SafeFunction(fn)
-    try:
-      v = fn(*args, **kwargs)
-    except Exception as e:
-      return cls.exception(e)
-    else:
-      return cls.value(v)
-
-  @classmethod
   def call(cls, fn, *args, **kwargs):
     """
     Call a function asynchronously and return a Promise with its result. If an
