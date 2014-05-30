@@ -34,6 +34,8 @@ Thread Management
 -----------------
 
 .. automethod:: Promise.executor
+.. autoclass:: UnboundedThreadPoolExecutor
+  :members: submit, shutdown
 
 Exceptions
 ----------

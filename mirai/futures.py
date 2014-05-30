@@ -1,6 +1,6 @@
 from concurrent import futures
 from concurrent.futures import TimeoutError
-import sys
+import logging
 import threading
 import time
 import traceback
@@ -57,6 +57,11 @@ class Promise(object):
 
       # return read-only version of promise
       return promise.future()
+
+  Parameters
+  ----------
+  future : concurrent.futures.Future
+      Future this promise wraps.
   """
 
   EXECUTOR = futures.ThreadPoolExecutor(max_workers=10)
@@ -124,7 +129,7 @@ class Promise(object):
     -------
     self : Future
     """
-    return self.respond(lambda fut: fn())
+    return self.respond(lambda fut: Promise.eval(fn).get())
 
   def filter(self, fn):
     """
@@ -144,7 +149,8 @@ class Promise(object):
         truth on this Promise's contents.
     """
     return self.flatmap(lambda v:
-      Promise.value(v) if fn(v) else Promise.exception(MiraiError("Value {} was filtered out".format(v)))
+      Promise.value(v) if Promise.eval(fn, v).get()
+      else Promise.exception(MiraiError(u"Value {} was filtered out".format(v)))
     )
 
   def flatmap(self, fn):
@@ -163,10 +169,22 @@ class Promise(object):
     result : Future
         Future containing return result of `fn`.
     """
-    def transform(fut):
-      assert fut.isdefined(), '.get() should not block'
-      return fn(fut.get())
-    return self.transform(transform)
+    def flatmap(fut):
+      assert fut.isdefined(), (
+        u"Internal callback in Promise.flatmap was called before the Promise "
+        u"it's responsible for finished. How did you make that happen? "
+      )
+
+      try:
+        result = Promise.eval(fn, fut.get()).get()
+      except Exception as e:
+        return Promise.exception(e)
+      else:
+        if not isinstance(result, Promise):
+          raise MiraiError(u"Functions chained with Promise.flatmap must return Promises!")
+        return result
+
+    return self.transform(flatmap)
 
   def foreach(self, fn):
     """
@@ -220,7 +238,7 @@ class Promise(object):
     """
     return self._future.result(timeout)
 
-  def getorelse(self, default):
+  def getorelse(self, default, timeout=None):
     """
     Like `Promise.get`, but instead of raising an exception when this Promise
     fails, returns a default value.
@@ -228,10 +246,20 @@ class Promise(object):
     Parameters
     ----------
     default : anything
-        default value to return in case of time
+        default value to return in case of timeout or exception.
+    timeout : None or float
+        time to wait before returning default value if this promise is unresolved.
+
+    Returns
+    -------
+    result : anything
+        value this Promise resolves to, if it resolves successfully, else
+        `default`.
     """
     try:
-      return self.get(timeout=0)
+      if timeout is None:
+        timeout = 0
+      return self.get(timeout=timeout)
     except Exception as e:
       return default
 
@@ -253,7 +281,7 @@ class Promise(object):
         setting the return value to `result`'s value. If this Promise is
         already successful, its value is propagated onto `result`.
     """
-    return self.rescue(lambda e: Promise.value(fn(e)))
+    return self.rescue(lambda e: Promise.eval(fn, e))
 
   def isdefined(self):
     """
@@ -332,12 +360,13 @@ class Promise(object):
         Future containing `fn` applied to this Promise's value. If this Promise
         fails, the exception is propagated.
     """
-    return self.flatmap(lambda v: Promise.value(fn(v)))
+    return self.flatmap(lambda v: Promise.eval(fn, v))
 
   def onfailure(self, fn):
     """
     Apply a callback if this Promise fails. Callbacks can be added after this
-    Promise has resolved.
+    Promise has resolved. If `fn` throws an exception, a warning is printed via
+    `logging`.
 
     Parameters
     ----------
@@ -349,20 +378,23 @@ class Promise(object):
     -------
     self : Promise
     """
-    def respond(fut):
-      assert fut.isdefined(), '.get() should not block'
+    def onfailure(fut):
+      assert fut.isdefined(), (
+        u"Internal callback in Promise.onfailure was called before the Promise "
+        u"it's responsible for finished. How did you make that happen? "
+      )
       try:
         v = fut.get()
       except Exception as e:
-        fn(e)
-      else:
-        pass
-    return self.respond(respond)
+        Promise.eval(fn, e).get()
+
+    return self.respond(onfailure)
 
   def onsuccess(self, fn):
     """
     Apply a callback if this Promise succeeds. Callbacks can be added after this
-    Promise has resolved.
+    Promise has resolved. If `fn` throws an exception, a warning is printed via
+    `logging`.
 
     Parameters
     ----------
@@ -374,15 +406,19 @@ class Promise(object):
     -------
     self : Promise
     """
-    def respond(fut):
-      assert fut.isdefined(), '.get() should not block'
+    def onsuccess(fut):
+      assert fut.isdefined(), (
+        u"Internal callback in Promise.onsuccess was called before the Promise "
+        u"it's responsible for finished. How did you make that happen? "
+      )
       try:
         v = fut.get()
       except Exception as e:
         pass
       else:
-        fn(v)
-    return self.respond(respond)
+        Promise.eval(fn, v).get()
+
+    return self.respond(onsuccess)
 
   def or_(self, *others):
     """
@@ -413,13 +449,25 @@ class Promise(object):
     Returns
     -------
     self : Promise
+
+    Raises
+    ------
+    MiraiError
+        if `other` isn't a Promise instance
     """
-    return self.onsuccess(other.setvalue).onfailure(other.setexception)
+    if not isinstance(other, Promise):
+      raise MiraiError(
+        "Attempting to proxy this Promise onto a non-Promise object. You can "
+        "only copy the state of one Promise to another. "
+      )
+    self.onsuccess(other.setvalue).onfailure(other.setexception)
+    return self
 
   def rescue(self, fn):
     """
     If this Promise fails, call `fn` on the ensuing exception to recover another
-    (potentially successful) Promise. Same as `Promise.handle`.
+    (potentially successful) Promise. Similar to `Promise.handle`, but must
+    return a Promise (rather than a value).
 
     Parameters
     ----------
@@ -433,46 +481,36 @@ class Promise(object):
         contains. If this Promise is successful, its value is propagated onto
         `result`.
     """
-    def transform(fut):
-      assert fut.isdefined(), '.get() should not block'
+    def rescue(fut):
       try:
-        v = fut.get()
+        assert fut.isdefined(), (
+          u"Internal callback in Promise.rescue was called before the Promise "
+          u"it's responsible for finished. How did you make that happen? "
+        )
+
+        try:
+          v = fut.get()
+        except Exception as e:
+          # Calling fn via Promise.eval(...).get() guarantees that any
+          # exceptions thrown will be wrapped in a SafeFunction, thus
+          # preserving the traceback context.
+          result = Promise.eval(fn, e).get()
+          if not isinstance(result, Promise):
+            raise MiraiError(u"Functions chained with Promise.rescue must return Futures!")
+          return result
+        else:
+          return Promise.value(v)
+
       except Exception as e:
-        return fn(e)
-      else:
-        return Promise.value(v)
-    return self.transform(transform)
+        return Promise.exception(e)
 
-  def transform(self, fn):
-    """
-    Apply a function with a single argument: this Promise after resolving.
-    The function must return another future.
-
-    Parameters
-    ----------
-    fn : (future,) -> Promise
-        Function to apply. Takes 1 positional argument. Must return a Promise.
-
-    Returns
-    -------
-    result : Future
-        Future containing return result of `fn`.
-    """
-    p = Promise()
-    def respond(fut):
-      assert fut.isdefined(), '.get() should not block'
-      try:
-        q = fn(fut)
-      except Exception as e:
-        p.setexception(e)
-      else:
-        p.update(q)
-    self.respond(respond)
-    return p
+    return self.transform(rescue)
 
   def respond(self, fn):
     """
-    Apply a function to this Promise when it's resolved.
+    Apply a function to this Promise when it's resolved. If `fn` raises an
+    exception a warning will be printed via `logging`, but no action will be
+    taken.
 
     Parameters
     ----------
@@ -485,12 +523,15 @@ class Promise(object):
     """
     def done_callback(fut):
       try:
-        fn(self)
+        Promise.eval(fn, self).get()
       except Exception as e:
-        traceback.print_stack()
-        print 'FATAL Uncaught exception in Promise.respond:', e # TODO log.error
-        sys.exit(1)                                             # TODO Better to exit or not?
+        log = logging.getLogger(__name__ + ".Promise")
+        log.warning(u"Function {} in Promise.respond threw an exception!".format(fn))
+        log.warning(e)
+        log.warning(traceback.format_exc())
+
     self._future.add_done_callback(done_callback)
+
     return self
 
   def select_(self, *others):
@@ -523,10 +564,15 @@ class Promise(object):
     Returns
     -------
     self : Promise
+
+    Raises
+    ------
+    AlreadyResolvedError
+        if this Promise's value is already set
     """
     with self._lock:
       if self.isdefined():
-        raise AlreadyResolvedError("Promise is already resolved; you cannot set its status again.")
+        raise AlreadyResolvedError(u"Promise is already resolved; you cannot set its status again.")
       else:
         self._future.set_exception(e)
         return self
@@ -544,13 +590,53 @@ class Promise(object):
     Returns
     -------
     self : Promise
+
+    Raises
+    ------
+    AlreadyResolvedError
+        if this Promise's value is already set
     """
     with self._lock:
       if self.isdefined():
-        raise AlreadyResolvedError("Promise is already resolved; you cannot set its status again.")
+        raise AlreadyResolvedError(u"Promise is already resolved; you cannot set its status again.")
       else:
         self._future.set_result(val)
         return self
+
+  def transform(self, fn):
+    """
+    Apply a function with a single argument (this Promise) after resolving.
+    The function must return another future.
+
+    Parameters
+    ----------
+    fn : (future,) -> Promise
+        Function to apply. Takes 1 positional argument. Must return a Promise.
+
+    Returns
+    -------
+    result : Future
+        Future containing return result of `fn`.
+    """
+    p = Promise()
+    def transform(fut):
+      assert fut.isdefined(), (
+        u"Internal callback in Promise.transform was called before the Promise "
+        u"it's responsible for finished. How did you make that happen? "
+      )
+
+      try:
+        q = Promise.eval(fn, fut).get()
+      except Exception as e:
+        p.setexception(e)
+      else:
+        if not isinstance(q, Promise):
+          raise MiraiError(u"Functions chained with Promise.transform must return Futures!")
+        p.update(q)
+
+    self.respond(transform)
+
+    return p
 
   def unit(self):
     """
@@ -576,7 +662,18 @@ class Promise(object):
     Returns
     -------
     self : Promise
+
+    Raises
+    ------
+    MiraiError
+        if `other` isn't a Promise
     """
+    if not isinstance(other, Promise):
+      raise MiraiError(
+        "`Promise.update`'s argument isn't a Promise. You can't copy the state "
+        "of this Promise onto a non-Promise object."
+      )
+
     other.proxyto(self)
     return self
 
@@ -592,7 +689,18 @@ class Promise(object):
     Returns
     -------
     self : Promise
+
+    Raises
+    ------
+    MiraiError
+        if `other` isn't a Promise
     """
+    if not isinstance(other, Promise):
+      raise MiraiError(
+        "`Promise.updateifempty`'s argument isn't a Promise. You can't copy the "
+        "state of this Promise onto a non-Promise object."
+      )
+
     def setvalue(v):
       try:
         self.setvalue(v)
@@ -629,10 +737,29 @@ class Promise(object):
     result : Promise
         Promise guaranteed to resolve in `duration` seconds.
     """
-    e = TimeoutError("Promise did not finish in {} seconds".format(duration))
+    e = TimeoutError(u"Promise did not finish in {} seconds".format(duration))
     return self.or_(Promise.wait(duration).flatmap(lambda v: Promise.exception(e)))
 
   # CONSTRUCTORS
+  @classmethod
+  def exception(cls, exc):
+    """
+    Construct a Promise that has already failed with a given exception.
+
+    Parameters
+    ----------
+    exc : Exception
+        Exception to fail new Promise with
+
+    Returns
+    -------
+    result : Future
+        New Promise that has already failed with the given exception.
+    """
+    f = cls()
+    f.setexception(exc)
+    return f.future()
+
   @classmethod
   def value(cls, val):
     """
@@ -677,67 +804,7 @@ class Promise(object):
     return Promise.call(wait).future()
 
   @classmethod
-  def exception(cls, exc):
-    """
-    Construct a Promise that has already failed with a given exception.
-
-    Parameters
-    ----------
-    exc : Exception
-        Exception to fail new Promise with
-
-    Returns
-    -------
-    result : Future
-        New Promise that has already failed with the given exception.
-    """
-    f = cls()
-    f.setexception(exc)
-    return f.future()
-
-  # COMBINING
-  @classmethod
-  def _wait(cls, fs, timeout=None, return_when=futures.FIRST_EXCEPTION):
-    """
-    Return a future that contains a partition of `fs` into complete and
-    incomplete promises.
-
-    Parameters
-    ----------
-    fs : [Promise]
-        List of promises to wait upon
-    timeout : float or None
-        number of seconds to wait before setting result's value
-
-    Returns
-    -------
-    result : Future
-        Future containing a 2-element tuple. The first element is a list of
-        compeleted concurrent.futures.Future, the second is a list of
-        incomplete ones.
-    """
-
-    result = cls()
-
-    def wait():
-      try:
-        _futures = [f._future for f in fs]
-        complete, incomplete = futures.wait(_futures, timeout=timeout, return_when=return_when)
-        result.setvalue( (list(complete), list(incomplete)) )
-      except Exception as e:
-        result.setexception(e)
-
-    # This method needs to live outside of the Promise.EXECUTOR as a race
-    # condition can arise if there len(fs) == n and max_workers == n as
-    # Promise.call(select) would be the n+1 st thread, causing a lock.
-    thread = threading.Thread(target=wait)
-    thread.daemon = True
-    thread.start()
-
-    return result.future()
-
-  @classmethod
-  def collect(cls, fs, timeout=None):
+  def collect(cls, fs):
     """
     Convert a sequence of Promises into a Promise containing a sequence of
     values, one per Promise in `fs`. The resulting Promise resolves once all
@@ -748,118 +815,147 @@ class Promise(object):
     ----------
     fs : [Promise]
         List of Promises to merge.
-    timeout : number or None
-        Number of seconds to wait before registering a `TimeoutError` with the
-        resulting Promise. If `None`, wait indefinitely.
 
     Returns
     -------
     result : Future
         Future containing values of all Futures in `fs`. If any Future in `fs`
-        fails, `result` fails with the same exception. If `timeout` seconds
-        pass before all Futures in `fs` resolve, `result` fails with a
-        `TimeoutError`.
+        fails, `result` fails with the same exception.
     """
+    if len(fs) == 0:
+      # Promise below will never fulfill if there are no fs
+      return Promise.value([])
+    else:
+      lock             = threading.RLock()
+      results          = [None for i in range(len(fs))]
+      result_container = Promise()
 
-    def collect((complete, incomplete)):
-      try:
-        failed = [c for c in complete if cls(c).isfailure()]
-        if len(failed) > 0:
-          # one or more futures failed
-          return cls(failed[0])
+      # for some odd reason, this variable isn't accessible in the `body`
+      # closure below if it's just a naive integer. Boxing it in a list somehow
+      # makes it work(?)
+      count            = [len(fs)]
 
-        elif len(incomplete) > 0:
-          # not all futures finished
-          m, n = len(complete), len(incomplete)
-          return cls.exception(
-            TimeoutError(
-              "{} of {} futures failed to complete in {} seconds."
-              .format(n, n+m, timeout)
+      for i in range(len(fs)):
+
+        # unless i is "captured" by a function call, all elements will use i ==
+        # len(fs)-1.
+        def body(i):
+
+          # immediately set result_container's value to the thrown exception
+          def onfailure(e):
+            (
+              result_container
+              .updateifempty(Promise.exception(e))
             )
+
+          # fill in one more value in the results array. if this is the last
+          # future to return successfully, set the value of the result
+          # container.
+          def onsuccess(v):
+            with lock:
+              results[i] = v
+              count[0]  -= 1
+              if count[0] == 0:
+                (
+                  result_container
+                  .updateifempty(Promise.value(results))
+                )
+
+          # attach success and failure callbacks to this future
+          (
+            fs[i]
+            .onsuccess(onsuccess)
+            .onfailure(onfailure)
           )
 
-        else:
-          # all futures succeeded
-          return cls.value([f.get(timeout=0) for f in fs])
-      except Exception as e:
-        return cls.exception(e)
+        body(i)
 
-    return (
-      cls
-      ._wait(fs, timeout=timeout)
-      .flatmap(collect)
-    )
+      return result_container
 
   @classmethod
-  def join(cls, fs, timeout=None):
+  def join(cls, fs):
     """
     Construct a Promise that resolves when all Promises in `fs` have resolved. If
     any Promise in `fs` fails, the error is propagated into the resulting
-    Promise. If `timeout` seconds pass before all Promises have resolved, the
-    resulting Promise fails with a `TimeoutError`.
+    Promise.
 
     Parameters
     ----------
     fs : [Promise]
         List of Promises to merge.
-    timeout : number or None
-        Number of seconds to wait before registering a `TimeoutError` with the
-        resulting Promise. If `None`, wait indefinitely.
 
     Returns
     -------
     result : Future
-        Future containing None if all Futures in `fs` succeed, the exception of
-        the first failing Future in `fs`, or a `TimeoutError` if `timeout`
-        seconds pass before all Futures in `fs` resolve.
+        Future containing None if all Futures in `fs` succeed, or the exception
+        of the first failing Future in `fs`.
     """
-    return cls.collect(fs, timeout=timeout).map(lambda v: None)
+    return cls.collect(fs).map(lambda v: None)
 
   @classmethod
-  def select(cls, fs, timeout=None):
+  def select(cls, fs):
     """
     Return a Promise containing a tuple of 2 elements. The first is the first
     Promise in `fs` to resolve; the second is all remaining Promises that may or
-    may not be resolved yet. If `timeout` seconds pass before any Promise
-    resolves, the resulting Promise fails with a `TimeoutError`. The resolved
-    Promise is not guaranteed to have completed successfully.
+    may not be resolved yet. The resolved Promise is not guaranteed to have
+    completed successfully.
 
     Parameters
     ----------
     fs : [Promise]
         List of Promises to merge.
-    timeout : number or None
-        Number of seconds to wait before registering a `TimeoutError` with the
-        resulting Promise. If `None`, wait indefinitely.
 
     Returns
     -------
     result : Future
         Future containing the first Future in `fs` to finish and all remaining
-        (potentially) unresolved Futures as a tuple of 2 elements for its value
-        or a `TimeoutError` for its exception.
+        (potentially) unresolved Futures as a tuple of 2 elements for its value.
     """
-
-    def select((complete, incomplete)):
-      try:
-        if len(complete) > 0:
-          complete, incomplete = complete[0], incomplete + complete[1:]
-          return cls.value( (cls(complete), map(cls, incomplete)) )
-        else:
-          return cls.exception(
-            TimeoutError(
-              "No future finished in Promise.select in {} seconds"
-              .format(timeout)
-            )
+    p = Promise()
+    if len(fs) == 0:
+      raise MiraiError('Promise.select requires at least one future')
+    else:
+      for f in fs:
+        # see comment in Promise.collect regarding loops and closures
+        def body(f):
+          # all futures, other than the one executing this callback
+          not_me = [g for g in fs if g != f]
+          f.respond(lambda f: \
+            p.updateifempty(Promise.value( (f, not_me) ))
           )
-      except Exception as e:
-        return cls.exception(e)
+        body(f)
+    return p
 
-    return (
-      cls
-      ._wait(fs, timeout=timeout, return_when=futures.FIRST_COMPLETED)
-      .flatmap(select)
-    )
+  @classmethod
+  def eval(cls, fn, *args, **kwargs):
+    """
+    Call a function (synchronously) and return a Promise with its result. If an
+    exception is thrown inside `fn`, a new exception type will be constructed
+    inheriting both from `MiraiError` and the exception's original type. The
+    new exception is the same the original, except that it also contains a
+    `context` string detailing the stack at the time the exception was thrown.
+
+    Parameters
+    ----------
+    fn : function
+        Function to be called
+    *args : arguments
+    **kwargs : keyword arguments
+
+    Returns
+    -------
+    result : Future
+        Future containing the result of `fn(*args, **kwargs)` as its value or
+        the exception thrown as its exception.
+    """
+    if not isinstance(fn, SafeFunction):
+      fn = SafeFunction(fn)
+    try:
+      v = fn(*args, **kwargs)
+    except Exception as e:
+      return cls.exception(e).future()
+    else:
+      return cls.value(v).future()
 
   @classmethod
   def eval(cls, fn, *args, **kwargs):
@@ -918,7 +1014,7 @@ class Promise(object):
     return cls(cls.EXECUTOR.submit(SafeFunction(fn), *args, **kwargs)).future()
 
   @classmethod
-  def executor(cls, executor=None):
+  def executor(cls, executor=None, wait=True):
     """
     Set/Get the EXECUTOR Promise uses. If setting, the current executor is
     first shut down.
@@ -928,6 +1024,9 @@ class Promise(object):
     executor : concurrent.futures.Executor or None
         If None, retrieve the current executor, otherwise, shutdown the current
         Executor object and replace it with this argument.
+    wait : bool, optional
+        Whether or not to block this thread until all workers are shut down
+        cleanly.
 
     Returns
     -------
@@ -938,7 +1037,7 @@ class Promise(object):
       return cls.EXECUTOR
     else:
       if cls.EXECUTOR is not None:
-        cls.EXECUTOR.shutdown()
+        cls.EXECUTOR.shutdown(wait=wait)
       cls.EXECUTOR = executor
       return cls.EXECUTOR
 
@@ -956,8 +1055,8 @@ class Future(Promise):
     proxyto(self, promise, allowed_specials)
 
   def setvalue(self, val):
-    raise AttributeError("Futures are read only; Promises are writable")
+    raise AttributeError(u"Futures are read only; Promises are writable")
 
   def setexception(self, val):
-    raise AttributeError("Futures are read only; Promises are writable")
+    raise AttributeError(u"Futures are read only; Promises are writable")
 

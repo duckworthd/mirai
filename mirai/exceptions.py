@@ -31,8 +31,8 @@ class ShadowException(MiraiError):
   """
 
   def __init__(self, exception, context):
-    self.exception   = exception
-    self.context = context
+    self.exception = exception
+    self.context   = context
 
   def __unicode__(self):
     return u"{cls}: {msg}\n{ctx}".format(
@@ -81,15 +81,24 @@ class SafeFunction(object):
     try:
       return self.f(*args, **kwargs)
     except Exception as e:
-      e_type, e_value, e_tb = sys.exc_info()
+      if isinstance(e, ShadowException):
+        raise e
+      else:
+        e_type, e_value, e_tb = sys.exc_info()
 
-      # turn stack into a string
-      text = joblib.format_stack.format_exc(e_type, e_value, e_tb, context=10, tb_offset=1)
+        # turn stack into a string
+        text = joblib.format_stack.format_exc(e_type, e_value, e_tb, context=10, tb_offset=1)
 
-      # manually delete e_tb (failing to do so will cause a memory leak. See
-      # documentation for sys.exc_info())
-      del e_tb
+        # manually delete e_tb (failing to do so will cause a memory leak. See
+        # documentation for sys.exc_info())
+        del e_tb
 
-      # construct a new exception instance that's of the same class as the one
-      # thrown, but also with additional context.
-      raise ShadowException.build(e, text)
+        if isinstance(e, MiraiError):
+          # You'll get an invalid MRO if you inherit from MiraiError _and_
+          # ShadowException (as the latter is already a child of MiraiError).
+          # In this case, there's no need to construct a new type.
+          raise ShadowException(e, text)
+        else:
+          # construct a new exception instance that's of the same class as the one
+          # thrown, but also with additional context.
+          raise ShadowException.build(e, text)
