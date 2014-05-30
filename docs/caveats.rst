@@ -61,6 +61,7 @@ worker threads will wait forever. For example,
 
   from concurrent.futures import ThreadPoolExecutor
   from mirai import Promise
+  import time
 
   def fanout(n):
     secondaries = [Promise.call(time.sleep, 0.1 * i) for i in range(n)]
@@ -69,38 +70,16 @@ worker threads will wait forever. For example,
   # only 5 workers available
   Promise.executor(ThreadPoolExecutor(max_workers=5))
 
-  # start 5 "primary" threads. Each of these will wait on 2 "secondary" threads,
+  # start 5 "primary" threads. Each of these will wait on 5 "secondary" threads,
   # but due to the maximum worker limit, those secondary threads will never get
   # a chance to run. The primary threads are already taking up all the workers!
-  primaries = [Promise.call(fanout, 2) for i in range(5)]
+  primaries = [Promise.call(fanout, 5) for i in range(5)]
 
   # this will never return...
   Promise.collect(primaries).get()
 
 The workaround for this is to use :class:`mirai.UnboundedThreadPoolExecutor`,
 which doesn't have an upper bound on the number of active threads.
-
-
-Combining promises isn't free
------------------------------
-
-:mod:`mirai` provides several functions for combining promises -- namely,
-:meth:`Promise.collect`, :meth:`Promise.join`, and :meth:`Promise.select`.
-Unlike all callbacks registered with :meth:`Promise.call`, these functions
-generate threads *outside of mirai's ThreadPoolExecutor*. This is because these
-functions ultimately wait upon the completion of other promises, which we
-already know can cause race conditions (see :ref:`waiting`).
-
-These threads are not bound by any thread pool, thus each call creates a new
-thread. If too many such threads are alive at the same time `bad things can
-happen`_.
-
-The workaround for this is to let :mod:`gevent` manage the :mod:`threading`
-module. If :func:`gevent.monkey.patch_all` is called before :mod:`mirai` is
-first imported, you can generate as many threads as you want, as they will be
-implicitly converted to greenlets.
-
-.. _`bad things can happen`: http://www.jstorimer.com/blogs/workingwithcode/7970125-how-many-threads-is-too-many
 
 
 Zombie threads
