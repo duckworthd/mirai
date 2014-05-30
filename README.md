@@ -23,7 +23,7 @@ $ pip install mirai --upgrade
 are populated with the result of an asynchronous computation. Promises provide
 a more streamlined way for dealing with asynchronous code than callbacks.
 
-```
+```python
 from mirai import Promise
 import funcy as fu
 
