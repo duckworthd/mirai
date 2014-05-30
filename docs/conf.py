@@ -16,18 +16,17 @@ import sys
 import os
 
 # define project root (for automatic API documentation)
-try:
-  from path import path
-  ROOT = path(__file__).abspath().dirname().parent.parent
-except ImportError:
-  ROOT = "../../"
+ROOT = os.path.abspath(os.path.split(__file__)[0] + "../../")
 sys.path.append(ROOT)
 
 # derive version from setup.py
 from setup import version
 
 # use flask's theme
-sys.path.append(ROOT.joinpath("docs/source/_themes"))
+sys.path.append(os.path.join(ROOT, "docs/_themes"))
+
+# flag used to determine if the docs are being compiled on readthedocs.org
+on_rtd = os.environ.get('READTHEDOCS', None) == 'True'
 
 # If extensions (or modules to document with autodoc) are in another directory,
 # add these directories to sys.path here. If the directory is relative to the
@@ -117,7 +116,11 @@ pygments_style = 'sphinx'
 
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
-html_theme = 'flask'
+if not on_rtd:
+  # git submodule doesn't work with readthedocs.org right now, so instead of
+  # using the flask theme defined in the _themes submodule, just use the
+  # default (which, to be honest, is pretty sweet).
+  html_theme = 'flask'
 
 # Theme options are theme-specific and customize the look and feel of a theme
 # further.  For a list of options available for each theme, see the

@@ -36,5 +36,6 @@ if __name__ == '__main__':
       ],
       tests_require     = [
         "nose>=1.3.1",
-      ]
+      ],
+      test_suite = "nose.collector",
   )

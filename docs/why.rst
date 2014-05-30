@@ -12,6 +12,7 @@ example, the following code fetches a set of webpages within a timeout, then
 ranks them according to fetch time.
 
 .. code-block:: python
+  :linenos:
 
   import time
 
@@ -47,11 +48,13 @@ Why not threading?
 ------------------
 
 :mod:`threading` is Python's low-level library for multithreaded code. It's
-extremely basic in its offering and requires significant attention to locks,
-timing, and racing threads. The following 48(!) lines implement equivalent
-logic, employing a :class:`Queue` to pass information back to the main thread.
+extremely scant in its offering and requires significant attention to locking,
+timing, and racing threads, obscuring the program's actual intent. The
+following 48(!) lines implement equivalent logic, employing a :class:`Queue` to
+pass information between threads,
 
 .. code-block:: python
+  :linenos:
 
   from Queue import Queue
   from threading import Thread, Timer, Lock
@@ -107,15 +110,16 @@ logic, employing a :class:`Queue` to pass information back to the main thread.
 Why not concurrent.futures?
 ---------------------------
 
-:mod:`concurrent.futures` is the new asynchronous computation library added by
-`PEP 3148`_ upon which `mirai` is built.  While the library offers the same
+:mod:`concurrent.futures` is the new asynchronous computation library added to
+Python's standard library in version 3.2.  While the library offers the same
 core benefits of `mirai`, it lacks the method-chaining additions that make
-using futures a breeze. The following 27 lines of code illustrate the same
-logic,
+working with futures a breeze. The following 27 lines of code illustrate the
+same logic,
 
 .. _`PEP 3148`:  http://legacy.python.org/dev/peps/pep-3148/
 
 .. code-block:: python
+  :linenos:
 
   from concurrent.futures import ThreadPoolExecutor, wait
   import time
@@ -154,22 +158,26 @@ Why not multiprocessing?
 :mod:`multiprocessing` and `mirai` actually achieve different things and
 actually have very little overlap. Whereas `mirai` is designed to speed up
 *IO-bound* code, whereas `multiprocessing` is designed to speed up *CPU-bound*
-code. If the latter sounds more like what you're looking for, take a look at
+code. If the latter sounds more like what you're looking for, **mirai cannot
+help you!** as it still bound by the `GIL`_. Instead, you should take a look at
 `multiprocessing`, `celery`_, or `joblib`_.
 
 .. _celery:  http://www.celeryproject.org/
 .. _joblib:  http://pythonhosted.org//joblib/
+.. _GIL:     http://42bits.wordpress.com/2010/10/24/python-global-interpreter-lock-gil-explained-pycon-tech-talk/
 
 
 Why not gevent?
 ---------------
 
-:mod:`gevent` provides an extremely performant event-loop based on `libev`.
-Used directly, `gevent` is not dissimilar from `concurrent.futures`, but does
-require more work to compose results. The following 28 lines of code
-illustrate.
+:mod:`gevent` replaces Python's default threads with "greenlets" managed by
+`libev`. The value in using `gevent` is that one can generate thousands of
+greenlets and still maintain a performant asynchronous system. Used directly,
+`gevent` is not dissimilar from `concurrent.futures`, but does require more
+work to compose results. The following 28 lines of code illustrate.
 
 .. code-block:: python
+  :linenos:
 
   from gevent.monkey import patch_all; patch_all()
 
@@ -201,7 +209,14 @@ illustrate.
     return sorted(results)
 
 
-"But `gevent` uses `libev`, which is way faster than any of the other
-examples!" you might say, but fear not -- `mirai` is 100% compatible with
-`gevent.monkey`. Simply patch `threading` before importing `mirai` to combine
-the power of `gevent` with the expressiveness of `mirai`!
+"But `gevent` uses `libev`, which is way more scalable than any of the other
+alternatives, including `mirai`!" you might say, but fear not -- `mirai`  (and
+`threading` and `concurrent.futures`) can use greenlets by monkey patching the
+standard library at the start of your code. Simply put the following line at
+the top of your main script, before any other import statements,
+
+.. code-block:: python
+
+  from gevent.monkey import patch_all; patch_all()
+
+Now `mirai` has all the performance benefits of greenlets!

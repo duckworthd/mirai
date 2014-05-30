@@ -1,7 +1,9 @@
 from concurrent import futures
 from concurrent.futures import TimeoutError
+import sys
 import threading
 import time
+import traceback
 
 from .exceptions import MiraiError, SafeFunction, AlreadyResolvedError
 from .utils import proxyto
@@ -122,13 +124,7 @@ class Promise(object):
     -------
     self : Future
     """
-    def ensure(v):
-      try:
-        Promise.call(fn)
-      except Exception as e:
-        pass
-
-    return self.onsuccess(ensure).onfailure(ensure)
+    return self.respond(lambda fut: fn())
 
   def filter(self, fn):
     """
@@ -147,16 +143,8 @@ class Promise(object):
         Future whose contents are the contents of this Promise if `fn` evaluates
         truth on this Promise's contents.
     """
-    return (
-      self
-      .flatmap(lambda v: Promise.collect([
-        Promise.value(v),
-        Promise.call(fn, v),
-      ]))
-      .flatmap(lambda (v, b):
-        Promise.value(v) if b
-        else Promise.exception(MiraiError("Value {} was filtered out".format(v)))
-      )
+    return self.flatmap(lambda v:
+      Promise.value(v) if fn(v) else Promise.exception(MiraiError("Value {} was filtered out".format(v)))
     )
 
   def flatmap(self, fn):
@@ -175,29 +163,10 @@ class Promise(object):
     result : Future
         Future containing return result of `fn`.
     """
-
-    result = Promise()
-
-    def populate(v):
-      def setvalue(fut):
-        try:
-          fut.proxyto(result)
-        except Exception as e:
-          result.setexception(e)
-
-      try:
-        (
-          Promise.call(fn, v)
-          .onsuccess(setvalue)
-          .onfailure(result.setexception)
-        )
-      except Exception as e:
-        result.setexception(e)
-
-    self.onsuccess(populate)
-    self.onfailure(result.setexception)
-
-    return result.future()
+    def transform(fut):
+      assert fut.isdefined(), '.get() should not block'
+      return fn(fut.get())
+    return self.transform(transform)
 
   def foreach(self, fn):
     """
@@ -211,9 +180,9 @@ class Promise(object):
 
     Returns
     -------
-    None
+    self : Promise
     """
-    self.onsuccess(fn)
+    return self.onsuccess(fn)
 
   def future(self):
     """
@@ -284,7 +253,7 @@ class Promise(object):
         setting the return value to `result`'s value. If this Promise is
         already successful, its value is propagated onto `result`.
     """
-    return self.rescue(lambda v: Promise.call(fn, v))
+    return self.rescue(lambda e: Promise.value(fn(e)))
 
   def isdefined(self):
     """
@@ -363,18 +332,7 @@ class Promise(object):
         Future containing `fn` applied to this Promise's value. If this Promise
         fails, the exception is propagated.
     """
-    result = Promise()
-
-    def map(v):
-      try:
-        Promise.call(fn, v).proxyto(result)
-      except Exception as e:
-        result.setexception(e)
-
-    self.onsuccess(map)
-    self.onfailure(result.setexception)
-
-    return result.future()
+    return self.flatmap(lambda v: Promise.value(fn(v)))
 
   def onfailure(self, fn):
     """
@@ -391,14 +349,15 @@ class Promise(object):
     -------
     self : Promise
     """
-    def onfailure(fut):
+    def respond(fut):
+      assert fut.isdefined(), '.get() should not block'
       try:
-        fut.result()
+        v = fut.get()
       except Exception as e:
-        Promise.call(fn, e)
-
-    self._future.add_done_callback(onfailure)
-    return self
+        fn(e)
+      else:
+        pass
+    return self.respond(respond)
 
   def onsuccess(self, fn):
     """
@@ -415,14 +374,15 @@ class Promise(object):
     -------
     self : Promise
     """
-    def onsuccess(fut):
+    def respond(fut):
+      assert fut.isdefined(), '.get() should not block'
       try:
-        Promise.call(fn, fut.result())
+        v = fut.get()
       except Exception as e:
         pass
-
-    self._future.add_done_callback(onsuccess)
-    return self
+      else:
+        fn(v)
+    return self.respond(respond)
 
   def or_(self, *others):
     """
@@ -439,27 +399,7 @@ class Promise(object):
     result : Future
         First future that is resolved, successfully or otherwise.
     """
-    result = Promise()
-
-    def or_():
-      def setresult(v):
-        try:
-          v[0].proxyto(result)
-        except Exception as e:
-          result.setexception(e)
-
-      try:
-        (
-          Promise
-          .select([self] + list(others))
-          .onsuccess(setresult)
-          .onfailure(result.setexception)
-        )
-      except Exception as e:
-        result.setexception(e)
-
-    Promise.call(or_)
-    return result.future()
+    return Promise.select((self,) + others).flatmap(lambda (fut, futs): fut)
 
   def proxyto(self, other):
     """
@@ -474,8 +414,7 @@ class Promise(object):
     -------
     self : Promise
     """
-    self.onsuccess(other.setvalue).onfailure(other.setexception)
-    return self
+    return self.onsuccess(other.setvalue).onfailure(other.setexception)
 
   def rescue(self, fn):
     """
@@ -494,28 +433,42 @@ class Promise(object):
         contains. If this Promise is successful, its value is propagated onto
         `result`.
     """
-    result = Promise()
-
-    def rescue(e):
-      def setvalue(fut):
-        try:
-          fut.proxyto(result)
-        except Exception as e:
-          result.setexception(e)
-
+    def transform(fut):
+      assert fut.isdefined(), '.get() should not block'
       try:
-        (
-          Promise.call(fn, e)
-          .onsuccess(setvalue)
-          .onfailure(result.setexception)
-        )
+        v = fut.get()
       except Exception as e:
-        result.setexception(e)
+        return fn(e)
+      else:
+        return Promise.value(v)
+    return self.transform(transform)
 
-    self.onsuccess(result.setvalue)
-    self.onfailure(rescue)
+  def transform(self, fn):
+    """
+    Apply a function with a single argument: this Promise after resolving.
+    The function must return another future.
 
-    return result.future()
+    Parameters
+    ----------
+    fn : (future,) -> Promise
+        Function to apply. Takes 1 positional argument. Must return a Promise.
+
+    Returns
+    -------
+    result : Future
+        Future containing return result of `fn`.
+    """
+    p = Promise()
+    def respond(fut):
+      assert fut.isdefined(), '.get() should not block'
+      try:
+        q = fn(fut)
+      except Exception as e:
+        p.setexception(e)
+      else:
+        p.update(q)
+    self.respond(respond)
+    return p
 
   def respond(self, fn):
     """
@@ -530,10 +483,14 @@ class Promise(object):
     -------
     self : Promise
     """
-    def respond(fut):
-      Promise.call(fn, Promise(fut))
-
-    self._future.add_done_callback(respond)
+    def done_callback(fut):
+      try:
+        fn(self)
+      except Exception as e:
+        traceback.print_stack()
+        print 'FATAL Uncaught exception in Promise.respond:', e # TODO log.error
+        sys.exit(1)                                             # TODO Better to exit or not?
+    self._future.add_done_callback(done_callback)
     return self
 
   def select_(self, *others):
@@ -567,14 +524,12 @@ class Promise(object):
     -------
     self : Promise
     """
-    self._lock.acquire()
-    if self.isdefined():
-      self._lock.release()
-      raise AlreadyResolvedError("Promise is already resolved; you cannot set its status again.")
-    else:
-      self._future.set_exception(e)
-      self._lock.release()
-      return self
+    with self._lock:
+      if self.isdefined():
+        raise AlreadyResolvedError("Promise is already resolved; you cannot set its status again.")
+      else:
+        self._future.set_exception(e)
+        return self
 
   def setvalue(self, val):
     """
@@ -590,14 +545,12 @@ class Promise(object):
     -------
     self : Promise
     """
-    self._lock.acquire()
-    if self.isdefined():
-      self._lock.release()
-      raise AlreadyResolvedError("Promise is already resolved; you cannot set its status again.")
-    else:
-      self._future.set_result(val)
-      self._lock.release()
-      return self
+    with self._lock:
+      if self.isdefined():
+        raise AlreadyResolvedError("Promise is already resolved; you cannot set its status again.")
+      else:
+        self._future.set_result(val)
+        return self
 
   def unit(self):
     """
@@ -609,16 +562,7 @@ class Promise(object):
         Promise with a value of `None` if this Promise succeeds. If this Promise
         fails, the exception is propagated.
     """
-    result = Promise()
-    try:
-      (
-        self
-        .onsuccess(lambda v: result.setvalue(None))
-        .onfailure(result.setexception)
-      )
-    except Exception as e:
-      result.setexception(e)
-    return result.future()
+    return self.map(lambda v: None)
 
   def update(self, other):
     """
@@ -916,6 +860,37 @@ class Promise(object):
       ._wait(fs, timeout=timeout, return_when=futures.FIRST_COMPLETED)
       .flatmap(select)
     )
+
+  @classmethod
+  def eval(cls, fn, *args, **kwargs):
+    """
+    Call a function (synchronously) and return a Promise with its result. If an
+    exception is thrown inside `fn`, a new exception type will be constructed
+    inheriting both from `MiraiError` and the exception's original type. The
+    new exception is the same the original, except that it also contains a
+    `context` attribute detailing the stack at the time the exception was
+    thrown.
+
+    Parameters
+    ----------
+    fn : function
+        Function to be called
+    *args : arguments
+    **kwargs : keyword arguments
+
+    Returns
+    -------
+    result : Future
+        Future containing the result of `fn(*args, **kwargs)` as its value or
+        the exception thrown as its exception.
+    """
+    fn = SafeFunction(fn)
+    try:
+      v = fn(*args, **kwargs)
+    except Exception as e:
+      return cls.exception(e)
+    else:
+      return cls.value(v)
 
   @classmethod
   def call(cls, fn, *args, **kwargs):
