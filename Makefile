@@ -25,3 +25,6 @@ upload: test
 
 docs: environment test
 	. $(ENVROOT)/bin/activate; cd docs; make html
+
+upload: test
+	. $(ENVROOT)/bin/activate; python setup.py sdist upload
