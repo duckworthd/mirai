@@ -1,6 +1,6 @@
 from concurrent import futures
 from concurrent.futures import TimeoutError
-import sys
+import logging
 import threading
 import time
 import traceback
@@ -129,7 +129,7 @@ class Promise(object):
     -------
     self : Future
     """
-    return self.respond(lambda fut: fn())
+    return self.respond(lambda fut: Promise.eval(fn).get())
 
   def filter(self, fn):
     """
@@ -149,7 +149,8 @@ class Promise(object):
         truth on this Promise's contents.
     """
     return self.flatmap(lambda v:
-      Promise.value(v) if fn(v) else Promise.exception(MiraiError("Value {} was filtered out".format(v)))
+      Promise.value(v) if Promise.eval(fn, v).get()
+      else Promise.exception(MiraiError(u"Value {} was filtered out".format(v)))
     )
 
   def flatmap(self, fn):
@@ -168,10 +169,22 @@ class Promise(object):
     result : Future
         Future containing return result of `fn`.
     """
-    def transform(fut):
-      assert fut.isdefined(), '.get() should not block'
-      return fn(fut.get())
-    return self.transform(transform)
+    def flatmap(fut):
+      assert fut.isdefined(), (
+        u"Internal callback in Promise.flatmap was called before the Promise "
+        u"it's responsible for finished. How did you make that happen? "
+      )
+
+      try:
+        result = Promise.eval(fn, fut.get()).get()
+      except Exception as e:
+        return Promise.exception(e)
+      else:
+        if not isinstance(result, Promise):
+          raise MiraiError(u"Functions chained with Promise.flatmap must return Promises!")
+        return result
+
+    return self.transform(flatmap)
 
   def foreach(self, fn):
     """
@@ -268,7 +281,7 @@ class Promise(object):
         setting the return value to `result`'s value. If this Promise is
         already successful, its value is propagated onto `result`.
     """
-    return self.rescue(lambda e: Promise.value(fn(e)))
+    return self.rescue(lambda e: Promise.eval(fn, e))
 
   def isdefined(self):
     """
@@ -347,12 +360,13 @@ class Promise(object):
         Future containing `fn` applied to this Promise's value. If this Promise
         fails, the exception is propagated.
     """
-    return self.flatmap(lambda v: Promise.value(fn(v)))
+    return self.flatmap(lambda v: Promise.eval(fn, v))
 
   def onfailure(self, fn):
     """
     Apply a callback if this Promise fails. Callbacks can be added after this
-    Promise has resolved.
+    Promise has resolved. If `fn` throws an exception, a warning is printed via
+    `logging`.
 
     Parameters
     ----------
@@ -364,20 +378,23 @@ class Promise(object):
     -------
     self : Promise
     """
-    def respond(fut):
-      assert fut.isdefined(), '.get() should not block'
+    def onfailure(fut):
+      assert fut.isdefined(), (
+        u"Internal callback in Promise.onfailure was called before the Promise "
+        u"it's responsible for finished. How did you make that happen? "
+      )
       try:
         v = fut.get()
       except Exception as e:
-        fn(e)
-      else:
-        pass
-    return self.respond(respond)
+        Promise.eval(fn, e).get()
+
+    return self.respond(onfailure)
 
   def onsuccess(self, fn):
     """
     Apply a callback if this Promise succeeds. Callbacks can be added after this
-    Promise has resolved.
+    Promise has resolved. If `fn` throws an exception, a warning is printed via
+    `logging`.
 
     Parameters
     ----------
@@ -389,15 +406,19 @@ class Promise(object):
     -------
     self : Promise
     """
-    def respond(fut):
-      assert fut.isdefined(), '.get() should not block'
+    def onsuccess(fut):
+      assert fut.isdefined(), (
+        u"Internal callback in Promise.onsuccess was called before the Promise "
+        u"it's responsible for finished. How did you make that happen? "
+      )
       try:
         v = fut.get()
       except Exception as e:
         pass
       else:
-        fn(v)
-    return self.respond(respond)
+        Promise.eval(fn, v).get()
+
+    return self.respond(onsuccess)
 
   def or_(self, *others):
     """
@@ -428,6 +449,11 @@ class Promise(object):
     Returns
     -------
     self : Promise
+
+    Raises
+    ------
+    MiraiError
+        if `other` isn't a Promise instance
     """
     if not isinstance(other, Promise):
       raise MiraiError(
@@ -440,7 +466,8 @@ class Promise(object):
   def rescue(self, fn):
     """
     If this Promise fails, call `fn` on the ensuing exception to recover another
-    (potentially successful) Promise. Same as `Promise.handle`.
+    (potentially successful) Promise. Similar to `Promise.handle`, but must
+    return a Promise (rather than a value).
 
     Parameters
     ----------
@@ -454,46 +481,36 @@ class Promise(object):
         contains. If this Promise is successful, its value is propagated onto
         `result`.
     """
-    def transform(fut):
-      assert fut.isdefined(), '.get() should not block'
+    def rescue(fut):
       try:
-        v = fut.get()
+        assert fut.isdefined(), (
+          u"Internal callback in Promise.rescue was called before the Promise "
+          u"it's responsible for finished. How did you make that happen? "
+        )
+
+        try:
+          v = fut.get()
+        except Exception as e:
+          # Calling fn via Promise.eval(...).get() guarantees that any
+          # exceptions thrown will be wrapped in a SafeFunction, thus
+          # preserving the traceback context.
+          result = Promise.eval(fn, e).get()
+          if not isinstance(result, Promise):
+            raise MiraiError(u"Functions chained with Promise.rescue must return Futures!")
+          return result
+        else:
+          return Promise.value(v)
+
       except Exception as e:
-        return fn(e)
-      else:
-        return Promise.value(v)
-    return self.transform(transform)
+        return Promise.exception(e)
 
-  def transform(self, fn):
-    """
-    Apply a function with a single argument: this Promise after resolving.
-    The function must return another future.
-
-    Parameters
-    ----------
-    fn : (future,) -> Promise
-        Function to apply. Takes 1 positional argument. Must return a Promise.
-
-    Returns
-    -------
-    result : Future
-        Future containing return result of `fn`.
-    """
-    p = Promise()
-    def respond(fut):
-      assert fut.isdefined(), '.get() should not block'
-      try:
-        q = fn(fut)
-      except Exception as e:
-        p.setexception(e)
-      else:
-        p.update(q)
-    self.respond(respond)
-    return p
+    return self.transform(rescue)
 
   def respond(self, fn):
     """
-    Apply a function to this Promise when it's resolved.
+    Apply a function to this Promise when it's resolved. If `fn` raises an
+    exception a warning will be printed via `logging`, but no action will be
+    taken.
 
     Parameters
     ----------
@@ -506,12 +523,15 @@ class Promise(object):
     """
     def done_callback(fut):
       try:
-        fn(self)
+        Promise.eval(fn, self).get()
       except Exception as e:
-        traceback.print_stack()
-        print 'FATAL Uncaught exception in Promise.respond:', e # TODO log.error
-        sys.exit(1)                                             # TODO Better to exit or not?
+        log = logging.getLogger(__name__ + ".Promise")
+        log.warning(u"Function {} in Promise.respond threw an exception!".format(fn))
+        log.warning(e)
+        log.warning(traceback.format_exc())
+
     self._future.add_done_callback(done_callback)
+
     return self
 
   def select_(self, *others):
@@ -544,10 +564,15 @@ class Promise(object):
     Returns
     -------
     self : Promise
+
+    Raises
+    ------
+    AlreadyResolvedError
+        if this Promise's value is already set
     """
     with self._lock:
       if self.isdefined():
-        raise AlreadyResolvedError("Promise is already resolved; you cannot set its status again.")
+        raise AlreadyResolvedError(u"Promise is already resolved; you cannot set its status again.")
       else:
         self._future.set_exception(e)
         return self
@@ -565,13 +590,53 @@ class Promise(object):
     Returns
     -------
     self : Promise
+
+    Raises
+    ------
+    AlreadyResolvedError
+        if this Promise's value is already set
     """
     with self._lock:
       if self.isdefined():
-        raise AlreadyResolvedError("Promise is already resolved; you cannot set its status again.")
+        raise AlreadyResolvedError(u"Promise is already resolved; you cannot set its status again.")
       else:
         self._future.set_result(val)
         return self
+
+  def transform(self, fn):
+    """
+    Apply a function with a single argument (this Promise) after resolving.
+    The function must return another future.
+
+    Parameters
+    ----------
+    fn : (future,) -> Promise
+        Function to apply. Takes 1 positional argument. Must return a Promise.
+
+    Returns
+    -------
+    result : Future
+        Future containing return result of `fn`.
+    """
+    p = Promise()
+    def transform(fut):
+      assert fut.isdefined(), (
+        u"Internal callback in Promise.transform was called before the Promise "
+        u"it's responsible for finished. How did you make that happen? "
+      )
+
+      try:
+        q = Promise.eval(fn, fut).get()
+      except Exception as e:
+        p.setexception(e)
+      else:
+        if not isinstance(q, Promise):
+          raise MiraiError(u"Functions chained with Promise.transform must return Futures!")
+        p.update(q)
+
+    self.respond(transform)
+
+    return p
 
   def unit(self):
     """
@@ -597,6 +662,11 @@ class Promise(object):
     Returns
     -------
     self : Promise
+
+    Raises
+    ------
+    MiraiError
+        if `other` isn't a Promise
     """
     if not isinstance(other, Promise):
       raise MiraiError(
@@ -619,6 +689,11 @@ class Promise(object):
     Returns
     -------
     self : Promise
+
+    Raises
+    ------
+    MiraiError
+        if `other` isn't a Promise
     """
     if not isinstance(other, Promise):
       raise MiraiError(
@@ -662,10 +737,29 @@ class Promise(object):
     result : Promise
         Promise guaranteed to resolve in `duration` seconds.
     """
-    e = TimeoutError("Promise did not finish in {} seconds".format(duration))
+    e = TimeoutError(u"Promise did not finish in {} seconds".format(duration))
     return self.or_(Promise.wait(duration).flatmap(lambda v: Promise.exception(e)))
 
   # CONSTRUCTORS
+  @classmethod
+  def exception(cls, exc):
+    """
+    Construct a Promise that has already failed with a given exception.
+
+    Parameters
+    ----------
+    exc : Exception
+        Exception to fail new Promise with
+
+    Returns
+    -------
+    result : Future
+        New Promise that has already failed with the given exception.
+    """
+    f = cls()
+    f.setexception(exc)
+    return f.future()
+
   @classmethod
   def value(cls, val):
     """
@@ -710,66 +804,6 @@ class Promise(object):
     return Promise.call(wait).future()
 
   @classmethod
-  def exception(cls, exc):
-    """
-    Construct a Promise that has already failed with a given exception.
-
-    Parameters
-    ----------
-    exc : Exception
-        Exception to fail new Promise with
-
-    Returns
-    -------
-    result : Future
-        New Promise that has already failed with the given exception.
-    """
-    f = cls()
-    f.setexception(exc)
-    return f.future()
-
-  # COMBINING
-  @classmethod
-  def _wait(cls, fs, timeout=None, return_when=futures.FIRST_EXCEPTION):
-    """
-    Return a future that contains a partition of `fs` into complete and
-    incomplete promises.
-
-    Parameters
-    ----------
-    fs : [Promise]
-        List of promises to wait upon
-    timeout : float or None
-        number of seconds to wait before setting result's value
-
-    Returns
-    -------
-    result : Future
-        Future containing a 2-element tuple. The first element is a list of
-        compeleted concurrent.futures.Future, the second is a list of
-        incomplete ones.
-    """
-
-    result = cls()
-
-    def wait():
-      try:
-        _futures = [f._future for f in fs]
-        complete, incomplete = futures.wait(_futures, timeout=timeout, return_when=return_when)
-        result.setvalue( (list(complete), list(incomplete)) )
-      except Exception as e:
-        result.setexception(e)
-
-    # This method needs to live outside of the Promise.EXECUTOR as a race
-    # condition can arise if there len(fs) == n and max_workers == n as
-    # Promise.call(select) would be the n+1 st thread, causing a lock.
-    thread = threading.Thread(target=wait)
-    thread.daemon = True
-    thread.start()
-
-    return result.future()
-
-  @classmethod
   def collect(cls, fs):
     """
     Convert a sequence of Promises into a Promise containing a sequence of
@@ -789,25 +823,54 @@ class Promise(object):
         fails, `result` fails with the same exception.
     """
     if len(fs) == 0:
-      return Promise.value([]) # Promise below will never fulfill if there are no fs
+      # Promise below will never fulfill if there are no fs
+      return Promise.value([])
     else:
-      lock  = threading.RLock()
-      xs    = [None] * len(fs)
-      count = [len(fs)] # If we don't box this number in a list, then our threaded accesses below will mysteriously hang [wat]
-      p     = Promise()
+      lock             = threading.RLock()
+      results          = [None for i in range(len(fs))]
+      result_container = Promise()
+
+      # for some odd reason, this variable isn't accessible in the `body`
+      # closure below if it's just a naive integer. Boxing it in a list somehow
+      # makes it work(?)
+      count            = [len(fs)]
+
       for i in range(len(fs)):
-        def body(i): # Capture i for closures
+
+        # unless i is "captured" by a function call, all elements will use i ==
+        # len(fs)-1.
+        def body(i):
+
+          # immediately set result_container's value to the thrown exception
           def onfailure(e):
-            p.updateifempty(Promise.exception(e))
-          def onsuccess(x):
+            (
+              result_container
+              .updateifempty(Promise.exception(e))
+            )
+
+          # fill in one more value in the results array. if this is the last
+          # future to return successfully, set the value of the result
+          # container.
+          def onsuccess(v):
             with lock:
-              xs[i] = x
-              count[0] -= 1
+              results[i] = v
+              count[0]  -= 1
               if count[0] == 0:
-                p.updateifempty(Promise.value(xs))
-          fs[i].onsuccess(onsuccess).onfailure(onfailure)
+                (
+                  result_container
+                  .updateifempty(Promise.value(results))
+                )
+
+          # attach success and failure callbacks to this future
+          (
+            fs[i]
+            .onsuccess(onsuccess)
+            .onfailure(onfailure)
+          )
+
         body(i)
-      return p
+
+      return result_container
 
   @classmethod
   def join(cls, fs):
@@ -850,11 +913,16 @@ class Promise(object):
     """
     p = Promise()
     if len(fs) == 0:
-      raise ValueError('Promise.select requires at least one future')
+      raise MiraiError('Promise.select requires at least one future')
     else:
       for f in fs:
-        def body(f): # Capture f for closures below
-          f.respond(lambda x: p.updateifempty(Promise.value((f, filter(lambda g: g != f, fs)))))
+        # see comment in Promise.collect regarding loops and closures
+        def body(f):
+          # all futures, other than the one executing this callback
+          not_me = [g for g in fs if g != f]
+          f.respond(lambda f: \
+            p.updateifempty(Promise.value( (f, not_me) ))
+          )
         body(f)
     return p
 
@@ -865,8 +933,7 @@ class Promise(object):
     exception is thrown inside `fn`, a new exception type will be constructed
     inheriting both from `MiraiError` and the exception's original type. The
     new exception is the same the original, except that it also contains a
-    `context` attribute detailing the stack at the time the exception was
-    thrown.
+    `context` string detailing the stack at the time the exception was thrown.
 
     Parameters
     ----------
@@ -881,13 +948,14 @@ class Promise(object):
         Future containing the result of `fn(*args, **kwargs)` as its value or
         the exception thrown as its exception.
     """
-    fn = SafeFunction(fn)
+    if not isinstance(fn, SafeFunction):
+      fn = SafeFunction(fn)
     try:
       v = fn(*args, **kwargs)
     except Exception as e:
-      return cls.exception(e)
+      return cls.exception(e).future()
     else:
-      return cls.value(v)
+      return cls.value(v).future()
 
   @classmethod
   def call(cls, fn, *args, **kwargs):
@@ -956,8 +1024,8 @@ class Future(Promise):
     proxyto(self, promise, allowed_specials)
 
   def setvalue(self, val):
-    raise AttributeError("Futures are read only; Promises are writable")
+    raise AttributeError(u"Futures are read only; Promises are writable")
 
   def setexception(self, val):
-    raise AttributeError("Futures are read only; Promises are writable")
+    raise AttributeError(u"Futures are read only; Promises are writable")
 
