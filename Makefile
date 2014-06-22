@@ -20,9 +20,6 @@ develop: environment
 test: environment
 	. $(ENVROOT)/bin/activate; python setup.py test
 
-upload: test
-	python setup.py sdist upload
-
 docs: environment test
 	. $(ENVROOT)/bin/activate; cd docs; make html
 
