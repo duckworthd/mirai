@@ -1,17 +1,9 @@
-from collections import namedtuple
-
-from mirai import Promise
-import requests
-
-
-# containers for possible states of an HTTP response
-Error   = namedtuple("Error"  , ["url", "exception"])
-Success = namedtuple("Success", ["url", "response" ])
+from commons import *
 
 
 def fetch_sync(url, retries=3):
   try:
-    response = requests.get(url)
+    response = urlget(url)
     return Success(url, response)
   except Exception as e:
     if retries > 0:
@@ -22,10 +14,12 @@ def fetch_sync(url, retries=3):
 
 def fetch_async(url, retries=3):
   return (
-    Promise.call(requests.get, url)
+    Promise
+    .call     (urlget, url)
     .map      (lambda response : Success(url, response))
     .rescue   (lambda error    :
-      fetch(url, retries-1) if retries > 0
+      fetch_async(url, retries-1)
+      if   retries > 0
       else Promise.value(Error(url, error))
     )
   )

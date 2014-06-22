@@ -1,17 +1,18 @@
-from collections import namedtuple
-
-from mirai import Promise
-import requests
+from commons import *
 
 
-# containers for possible HTTP responses
-Error   = namedtuple("Error"  , ["url", "exception"])
-Success = namedtuple("Success", ["url", "response" ])
+def fetch_sync(url):
+  try:
+    response = urlget(url)
+    return Success(url, response)
+  except Exception as e:
+    return Error(url, e)
 
 
 def fetch_async(url):
   return (
-    Promise.call(requests.get, url)
-    .map      (lambda response : Success(url, response))
-    .handle   (lambda error    : Error(url, error))
+    Promise
+    .call  (urlget, url)
+    .map   (lambda response : Success(url, response))
+    .handle(lambda error    : Error  (url, error   ))
   )

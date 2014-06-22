@@ -19,10 +19,7 @@ Using Promises
 --------------
 
 .. autoclass:: Promise
-  :members: andthen, ensure, filter, flatmap, foreach, future, get, getorelse, \
-    handle, isdefined, isfailure, issuccess, join_, map, onfailure, onsuccess, \
-    or_, proxyto, rescue, respond, select_, setexception, setvalue, transform, \
-    unit, update, updateifempty, within
+  :members: andthen, ensure, filter, flatmap, foreach, future, get, getorelse, handle, isdefined, isfailure, issuccess, join_, map, onfailure, onsuccess, or_, proxyto, rescue, respond, select_, setexception, setvalue, transform, unit, update, updateifempty, within
 
 Combining Promises
 ------------------

@@ -1,106 +1,58 @@
-from gevent.monkey import patch_all; patch_all()
-
-from collections import namedtuple
-from urlparse import urljoin
-from time import time as now
-
-from mirai import Promise, TimeoutError
-from pyquery import PyQuery as pq
-import funcy as fu
-import requests
+from commons import *
+from tutorial04 import fetch_sync, fetch_async
 
 
-# containers for possible states of an HTTP response
-Error   = namedtuple("Error"  , ["url", "exception",      ])
-Success = namedtuple("Success", ["url", "time", "response"])
-Timeout = namedtuple("Timeout", ["url",                   ])
-
-def abslink(domain, l):
-  """Turn a (potentially) relative URL into an absolute one"""
-  if l.startswith("/"): return urljoin(domain, l)
-  else                : return l
-
-
-def links(url, text):
-  """Extract all links from a web page"""
-  links = pq(text)("a").map(lambda _, el: pq(el).attr("href"))
-  return [
-    abslink(url, l) for l in links
-    if l.startswith("http") or l.startswith("/")
-  ]
-
-
-def time_left(start, given):
-  return given - (now() - start)
-
-
-def fetch_sync(url, remaining=10.0, retries=3):
-  if remaining < 0: return Timeout(url)
-  start = now()
-  try:
-    response = requests.get(url)
-    if time_left(start, remaining) > 0:
-      return Success(url, now() - start, response)
-    else:
-      return Timeout(url)
-  except Exception as e:
-    if retries > 0:
-      return fetch_sync(url, time_left(start, remaining), retries-1)
-    else:
-      return Error(url, e)
-
-
-def fetch_async(url, remaining=10.0, retries=3):
-  if remaining < 0: return Promise.value(Timeout(url))
-  start = now()
-  return (
-    Promise.call(requests.get, url)
-    .within(remaining)
-    .map      (lambda response : Success(url, now() - start, response))
-    .rescue   (lambda error    :
-      fetch_async(url, time_left(start, remaining), retries-1) if retries > 0
-      else Promise.value(Error(url, error))
-    )
-  )
-
-
-def scrape_sync(url, remaining=10.0, retries=3, maxdepth=0):
-  start = now()
-  if   remaining <= 0: return [Timeout(url)]
-  elif maxdepth  == 0: return [fetch_sync(url, time_left(start, remaining), retries)]
-  elif maxdepth   < 0: return []
+def scrape_sync(url, finish_by, retries=3, maxdepth=0):
+  remaining = finish_by - time.time()
+  if   remaining <= 0:
+    return [Timeout(url, None)]
+  elif maxdepth  == 0:
+    return [fetch_sync(url, finish_by, retries)]
+  elif maxdepth   < 0:
+    return []
   else:
-    status   = fetch_sync(url, time_left(start, remaining), retries)
+    status   = fetch_sync(url, finish_by, retries)
     if isinstance(status, Success):
       linkset  = links(url, status.response.text)
-      statuses = [
-        scrape_sync(link, time_left(start, remaining), retries, maxdepth-1)
+      children = [
+        scrape_sync(link, finish_by, retries, maxdepth-1)
         for link in linkset
-      ] + [status]
-      return fu.cat(statuses)
+      ]
+      return fu.cat([[status]] + children)
     else:
       return [status]
 
 
-def scrape_async(url, remaining=10.0, retries=3, maxdepth=0):
-  start = now()
-  if   remaining <= 0: return Promise.value([Timeout(url)])
-  elif maxdepth  == 0: return fetch_async(url, time_left(start, remaining), retries) \
-                              .map(lambda status: [status])
-  elif maxdepth   < 0: return Promise.value([])
-  else:
+def scrape_async(url, finish_by, retries=3, maxdepth=0):
+  remaining = finish_by - time.time()
+  if   remaining <= 0:
+    return Promise.value([Timeout(url, None)])
+  elif maxdepth  == 0:
     return (
-      fetch_async(url, time_left(start, remaining), retries)
-      .map(lambda status: (links(url, status.response.text), status) \
-        if isinstance(status, Success)
-        else ([], status)
+      fetch_async(url, finish_by, retries)
+      .map(lambda status: [status])
+    )
+  elif maxdepth   < 0:
+    return Promise.value([])
+  else:
+    status  = fetch_async(url, finish_by, retries)
+
+    children = (
+      status
+      .map(lambda status: \
+        links(url, status.response.text)
+        if   isinstance(status, Success)
+        else []
       )
-      .map(lambda (linkset, status): [
-        scrape_async( link, time_left(start, remaining), retries, maxdepth-1)
+      .map(lambda linkset: [
+        scrape_async(link, finish_by, retries, maxdepth-1)
         for link in linkset
-        ] + [ Promise.value([status]) ]
-      )
+      ])
       .flatmap(Promise.collect)
-      .map(fu.cat)
     )
 
+    return (
+      status.join_(children)
+      .map(lambda (status, children): [[status]] + children)
+      .map(fu.cat)
+    )

@@ -1,126 +1,97 @@
-from gevent.monkey import patch_all; patch_all()
+from commons import *
 
-from concurrent.futures import ThreadPoolExecutor
-from collections import namedtuple
-from urlparse import urljoin
 import logging
 import logging.config
-import time
 
-from mirai import Promise, TimeoutError
-from pyquery import PyQuery as pq
+from mirai import UnboundedThreadPoolExecutor
 import click
-import funcy as fu
-import requests
 
 
-Error   = namedtuple("Error"  , ["url", "exception"])
-Success = namedtuple("Success", ["url", "response" ])
-Timeout = namedtuple("Timeout", ["url", "exception"])
-
-def abslink(domain, l):
-  """Turn a (potentially) relative URL into an absolute one"""
-  if l.startswith("/"): return urljoin(domain, l)
-  else                : return l
-
-
-def links(url, text):
-  """Extract all links from a web page"""
-  links = pq(text)("a").map(lambda _, el: pq(el).attr("href"))
-  return [
-    abslink(url, l) for l in links
-    if l.startswith("http") or l.startswith("/")
-  ]
-
-
-# def fetch(url):
-#   try:
-#     start    = time.time()
-#     response = requests.get(url)
-#     end      = time.time()
-#     return Success(url, response)
-#   except Exception as e:
-#     return Error(url, e)
-#
-#
-# def scrape(url, within, maxdepth=0):
-#   start = time.time()
-#   if within <= 0:
-#     return [Timeout(url, None)]
-#   elif maxdepth == 0:
-#     status = fetch(url)
-#     if within < time.time() - start: return [Timeout(url, e)]
-#     else                           : return [status]
-#   elif maxdepth < 0:
-#     return []
-#   else:
-#     status = fetch(url)
-#     if within < time.time() - start: return [Timeout(url, e)]
-#     linkset = links(url, status.response.text)
-#     statuses = [
-#       scrape(
-#         link,
-#         within   = (within - (time.time() - start)),
-#         maxdepth = maxdepth-1
-#       )
-#       for link in linkset
-#     ] + [status]
-#     statuses = fu.concat(statuses)
-#     return statuses
-
-
-def fetch(url):
-  start = time.time()
+def fetch(url, finish_by):
+  start  = time.time()
+  within = finish_by - start
   return (
-    Promise.call(requests.get, url)
+    Promise
+    .call(urlget, url, finish_by)
+    .within(within)
     .onsuccess(lambda status   : \
       logging.info(u"Fetched {} in {:0.3f} seconds.".format(url, time.time() - start)) \
     )
     .onfailure(lambda error    : \
-      logging.warning(u"Failed to fetch {}".format(url))
+      logging.warning(u"Failed to fetch {} in {:.2f} seconds".format(url, finish_by - time.time()))
     )
-    .map      (lambda response : Success(url, response))
-    .handle   (lambda error    : Error(url, error))
+    .map   (lambda response : Success(url, response))
+    .rescue(lambda error    : \
+           Promise.exception(TimeoutError(url, error))
+      if   isinstance(error, requests.exceptions.Timeout)
+      else Promise.exception(error)
+    )
   )
 
 
-def scrape(url, within, maxdepth=0):
-  logging.info("{:0.3f} seconds left to fetch {}".format(within, url))
+def scrape(url, finish_by, maxdepth=0):
+  """
+  Scrape a webpage and all its links. Guaranteed to finish within a fixed
+  amount of time.
 
-  start = time.time()
+  Parameters
+  ----------
+  url : str
+      web page URL
+  finish_by : float
+      time to finish by in seconds since epoch
+  maxdepth : int, optional
+      maximum number of links to follow in a chain
+
+  Returns
+  -------
+  pages : Future([Status])
+      A Future containing a list of `Success`, `Error`, or `Timeout` objects.
+  """
+  within = finish_by - time.time()
+
   if within <= 0:
     # out of time
-    return Promise.value([Timeout(url, None)])
-  elif maxdepth == 0:
-    # don't get any more links
-    return (
-      fetch(url)
-      .within(within)
-      .map(lambda status: [status])
-      .handle(lambda e: [Timeout(url, e)])
-    )
-  elif maxdepth < 0:
-    # this shouldn't happen, but just in case
     return Promise.value([])
-  else:
-    # fetch links
-    return (
-      fetch(url)
-      .within(within)
-      .map(lambda status: (links(url, status.response.text), status))
-      .map(lambda (linkset, status): [
-        scrape(
-          link,
-          within   = (within - (time.time() - start)),
-          maxdepth = maxdepth - 1,
-        ) for link in linkset
-      ] + [
-        Promise.value([status])
-      ])
-      .flatmap(Promise.collect)
-      .map(fu.cat)
-      .handle(lambda err: [Timeout(url, err)])
+
+  logging.info("{:0.3f} seconds left to fetch {}".format(within, url))
+
+  # fetch the raw page. this future may contain an exception if it takes too
+  # long to retrieve.
+  page = fetch(url, finish_by)
+
+  # transform the previous future into a Success/Failure/Timeout, regardless of
+  # whether or not it completed successfully.
+  page_status = (
+    page
+    .handle(lambda error    : \
+           Timeout(url, error)
+      if   isinstance(error, TimeoutError)
+      else Error(url, error)
     )
+    .map   (lambda status: [status])
+  )
+
+  # Scrape all of this page's children. Note that if `page` contains an
+  # exception, no scraping will actually be done.
+  child_page_statuses = (
+    page
+    .map(lambda status: links(url, status.response.text))
+    .map(lambda linkset: [
+      scrape(link, finish_by, maxdepth=(maxdepth - 1))
+      for link in linkset
+    ])
+    .flatmap(Promise.collect)
+    .map(fu.cat)
+    .handle(lambda e: [])
+  )
+
+  # combine [page] with [child1, child2, ...]
+  return (
+    page_status
+    .join_(child_page_statuses)
+    .map(lambda (parent, children): parent + children)
+  )
 
 
 @click.command()
@@ -136,13 +107,17 @@ def main(url, within, maxdepth):
     }
   })
 
+  Promise.executor(UnboundedThreadPoolExecutor())
+
   start   = time.time()
-  results = scrape(url, within, maxdepth=maxdepth).get()
+  results = scrape(url, finish_by=(start + within), maxdepth=maxdepth).get()
   stop    = time.time()
 
   print u'Retrieved {:,d} URLs in {:0.3f} seconds'.format(len(results), stop-start)
   for responsetype, responses in fu.group_by(type, results).items():
     print u'{:20s} {:,d}'.format(responsetype.__name__, len(responses))
+
+  Promise.executor().shutdown()
 
 
 if __name__ == '__main__':

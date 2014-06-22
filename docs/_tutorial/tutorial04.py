@@ -1,44 +1,40 @@
-from collections import namedtuple
-from time import time as now
-
-from mirai import Promise, TimeoutError
-import requests
+from commons import *
 
 
-# containers for possible states of an HTTP response
-Error   = namedtuple("Error"  , ["url", "exception",      ])
-Success = namedtuple("Success", ["url", "time", "response"])
-Timeout = namedtuple("Timeout", ["url",                   ])
+def fetch_sync(url, finish_by, retries=3):
+  remaining = finish_by - time.time()
 
-def time_left(start, given):
-  return given - (now() - start)
+  if remaining <= 0:
+    return Timeout(url, None)
 
-
-def fetch_sync(url, remaining=10.0, retries=3):
-  if remaining < 0: return Timeout(url)
-  start = now()
   try:
-    response = requests.get(url)
-    if time_left(start, remaining) > 0:
-      return Success(url, now() - start, response)
-    else:
-      return Timeout(url)
+    response = urlget(url, finish_by)
+    return Success(url, response)
   except Exception as e:
     if retries > 0:
-      return fetch_sync(url, time_left(start, remaining), retries-1)
+      return fetch_sync(url, finish_by, retries-1)
     else:
-      return Error(url, e)
+      if isinstance(e, requests.exceptions.Timeout):
+        return Timeout(url, e)
+      else:
+        return Error(url, e)
 
 
-def fetch_async(url, remaining=10.0, retries=3):
-  if remaining < 0: return Promise.value(Timeout(url))
-  start = now()
+def fetch_async(url, finish_by, retries=3):
+  remaining = finish_by - time.time()
+
+  if remaining < 0:
+    return Promise.value(Timeout(url, None))
+
   return (
-    Promise.call(requests.get, url)
-    .within(remaining)
-    .map      (lambda response : Success(url, now() - start, response))
+    Promise
+    .call     (urlget, url, finish_by)
+    .map      (lambda response : Success(url, response))
     .rescue   (lambda error    :
-      fetch_async(url, time_left(start, remaining), retries-1) if retries > 0
-      else Promise.value(Error(url, error))
+      fetch_async(url, finish_by, retries-1)
+      if   retries > 0
+      else Promise.value(Timeout(url, error))
+           if   isinstance(error, requests.exceptions.Timeout)
+           else Promise.value(Error(url, error))
     )
   )

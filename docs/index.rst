@@ -8,11 +8,11 @@ Welcome to mirai
 
 :mod:`mirai` is a multithreading library for Python that makes asynchronous
 computation a breeze. Built on :mod:`concurrent.futures` and modeled after
-`Twitter Futures`_, `mirai` helps you write modular, easy-to-read asynchronous
-workflows without falling into callback hell.
+`Twitter Futures`_, :mod:`mirai` helps you write modular, easy-to-read
+asynchronous workflows without falling into callback hell.
 
-What can `mirai` do for you? Here's a demo for fetching the weather forecast
-for San Francisco with a 10 second timeout,
+What can :mod:`mirai` do for you? Here's a demo for fetching the weather
+forecast for San Francisco with a 10 second timeout,
 
 .. code-block:: python
 
@@ -49,7 +49,7 @@ You can install the library with,
 
 .. code-block:: bash
 
-  pip install mirai
+  $ pip install mirai
 
 
 Documentation
