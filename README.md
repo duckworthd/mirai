@@ -8,14 +8,22 @@ operator chaining-based way for using promises and futures.
 [1]: http://twitter.github.io/scala_school/finagle.html#futconcurrent
 [2]: https://docs.python.org/dev/library/concurrent.futures.html
 
-Diving In
-=========
+### Installation
+
+`mirai` is available on [pypi](http://pypi.python.org/pypi/mirai). Installation 
+is as simple as using `pip`,
+
+```bash
+$ pip install mirai --upgrade
+```
+
+### Diving In
 
 `mirai` is based around the concept of a Promises -- containers that
 are populated with the result of an asynchronous computation. Promises provide
 a more streamlined way for dealing with asynchronous code than callbacks.
 
-```
+```python
 from mirai import Promise
 import funcy as fu
 
@@ -71,3 +79,7 @@ import funcy as fu
   .get()
 )
 ```
+
+### Documentation
+
+Learn more about `mirai` at [http://mirai.readthedocs.org/](http://mirai.readthedocs.org/)
