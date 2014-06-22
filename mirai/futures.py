@@ -794,9 +794,16 @@ class Promise(object):
     result : Future
         Promise that will resolve in `duration` seconds with value `None`.
     """
+    # store time to finish by, as `wait` may not start until much later and
+    # `duration` should be with respect to when _this_ method was called, not
+    # when the _callback_ starts.
+    finish_by = time.time() + duration
+
     def wait():
       try:
-        time.sleep(duration)
+        duration = finish_by - time.time()
+        if duration > 0:
+          time.sleep(duration)
         return None
       except Exception as e:
         raise e
