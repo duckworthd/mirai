@@ -31,7 +31,7 @@ class UnboundedThreadPoolExecutor(Executor):
       self._pool = None
     else:
       # finite number of workers? just use a ThreadPoolExecutor
-      self._pool = ThreadPoolExecutor(max_workerss)
+      self._pool = ThreadPoolExecutor(max_workers)
 
   def submit(self, fn, *args, **kwargs):
     """Submit a new task to be executed asynchronously.
